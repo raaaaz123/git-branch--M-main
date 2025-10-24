@@ -22,14 +22,31 @@ async def root():
 @router.get("/health")
 async def health_check():
     """Detailed health check"""
-    return {
-        "status": "healthy",
-        "services": {
-            "qdrant": "connected" if qdrant_service.qdrant_client else "disconnected",
-            "embeddings": "available" if qdrant_service.embeddings else "unavailable",
-            "openrouter": "available"
+    try:
+        # Check Qdrant connection without failing
+        qdrant_status = "connected" if qdrant_service.qdrant_client else "disconnected"
+        embeddings_status = "available" if qdrant_service.embeddings else "unavailable"
+        
+        return {
+            "status": "healthy",
+            "timestamp": "2024-01-01T00:00:00Z",  # You can add actual timestamp if needed
+            "services": {
+                "qdrant": qdrant_status,
+                "embeddings": embeddings_status,
+                "openrouter": "available"
+            }
         }
-    }
+    except Exception as e:
+        # Return basic health even if services are down
+        return {
+            "status": "degraded",
+            "message": f"Some services may be unavailable: {str(e)}",
+            "services": {
+                "qdrant": "unknown",
+                "embeddings": "unknown", 
+                "openrouter": "unknown"
+            }
+        }
 
 
 @router.post("/api/test-qdrant")

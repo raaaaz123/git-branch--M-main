@@ -32,8 +32,13 @@ ADDITIONAL_ORIGINS = os.getenv("ALLOWED_ORIGINS", "").split(",") if os.getenv("A
 ALLOWED_ORIGINS = [
     "http://localhost:3000", 
     "http://localhost:3001",
+    "https://ai-native-crm.vercel.app",
+    "https://ai-native-crm-git-main-raaaaz123.vercel.app",  # Vercel preview URLs
     *[origin.strip() for origin in ADDITIONAL_ORIGINS if origin.strip()]
 ]
+
+# For production, allow all origins (temporary fix for CORS issues)
+ALLOWED_ORIGINS.append("*")
 
 # API Configuration
 API_HOST = os.getenv("HOST", "0.0.0.0")

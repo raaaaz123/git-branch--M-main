@@ -1,0 +1,41 @@
+# Google App Engine configuration
+runtime: python311
+entrypoint: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+# Environment variables (replace with your actual values)
+env_variables:
+  PINECONE_API_KEY: "your-pinecone-api-key"
+  PINECONE_INDEX_NAME: "rexa-engage"
+  OPENAI_API_KEY: "your-openai-api-key"
+  OPENROUTER_API_KEY: "your-openrouter-api-key"
+  OPENROUTER_SITE_URL: "https://your-site.com"
+  OPENROUTER_SITE_NAME: "Rexa Engage"
+  FIREBASE_PROJECT_ID: "rexa-engage"
+  # Firebase credentials - use Secret Manager for production
+  
+# Automatic scaling
+automatic_scaling:
+  min_instances: 0
+  max_instances: 2
+  target_cpu_utilization: 0.65
+  target_throughput_utilization: 0.6
+
+# Instance class (F1 is free tier)
+instance_class: F1
+
+# Health checks
+liveness_check:
+  path: "/health"
+  check_interval_sec: 30
+  timeout_sec: 4
+  failure_threshold: 2
+  success_threshold: 2
+
+readiness_check:
+  path: "/health"
+  check_interval_sec: 5
+  timeout_sec: 4
+  failure_threshold: 2
+  success_threshold: 2
+  app_start_timeout_sec: 300
+

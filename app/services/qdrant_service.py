@@ -204,17 +204,28 @@ class QdrantService:
                             # Old collection format - needs migration
                             print(f"⚠️ Collection uses old format (single vector)")
                             print(f"💡 For hybrid search, recreate collection with dense+sparse vectors")
+                            self._recreate_collection_with_hybrid_config(vector_size)
                             return
                     else:
                         # Single vector config (old format)
                         existing_size = collection_info.config.params.vectors.size
                         print(f"⚠️ Collection uses old format (dimension: {existing_size})")
                         print(f"💡 For hybrid search, recreate collection with dense+sparse vectors")
+                        self._recreate_collection_with_hybrid_config(vector_size)
                         return
                     
                     if existing_size != vector_size:
                         print(f"⚠️ Warning: Collection has dimension {existing_size}, but embeddings have dimension {vector_size}")
-                        print(f"💡 You may need to recreate the collection with correct dimensions")
+                        print(f"💡 Recreating collection with correct dimensions...")
+                        self._recreate_collection_with_hybrid_config(vector_size)
+                        return
+                
+                # Check if sparse vectors are configured
+                if not hasattr(collection_info.config.params, 'sparse_vectors') or not collection_info.config.params.sparse_vectors:
+                    print(f"⚠️ Collection missing sparse vector configuration")
+                    print(f"💡 Recreating collection with hybrid config...")
+                    self._recreate_collection_with_hybrid_config(vector_size)
+                    return
             
             # Create payload indexes for filtering (critical for search and deletion performance)
             print(f"🔍 Creating payload indexes for widgetId, businessId, and itemId...")
@@ -259,9 +270,98 @@ class QdrantService:
                     print(f"✅ Payload index for 'itemId' already exists")
                 else:
                     print(f"⚠️ Could not create itemId index: {idx_error}")
-                    
+            
         except Exception as e:
             print(f"❌ Error ensuring collection exists: {e}")
+            raise
+
+    def _recreate_collection_with_hybrid_config(self, vector_size: int):
+        """Recreate collection with proper hybrid configuration"""
+        try:
+            print(f"🔄 Recreating collection '{self.collection_name}' with hybrid config...")
+            
+            # Delete existing collection
+            try:
+                self.qdrant_client.delete_collection(self.collection_name)
+                print(f"🗑️ Deleted old collection")
+            except Exception as e:
+                print(f"⚠️ Could not delete old collection: {e}")
+            
+            # Create new collection with hybrid config
+            self.qdrant_client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config={
+                    "dense": VectorParams(
+                        size=vector_size,
+                        distance=Distance.COSINE
+                    )
+                },
+                sparse_vectors_config={
+                    "sparse": SparseVectorParams(
+                        modifier=Modifier.IDF  # BM42 uses IDF weighting
+                    )
+                }
+            )
+            print(f"✅ Hybrid collection '{self.collection_name}' recreated successfully")
+            print(f"   ✅ Dense vectors: Ready for semantic search")
+            print(f"   ✅ Sparse vectors: Ready for keyword search (BM42)")
+            
+            # Recreate payload indexes
+            self._create_payload_indexes()
+            
+        except Exception as e:
+            print(f"❌ Error recreating collection: {e}")
+            raise
+
+    def _create_payload_indexes(self):
+        """Create payload indexes for filtering"""
+        try:
+            print(f"🔍 Creating payload indexes...")
+            
+            # Create index for widgetId
+            try:
+                self.qdrant_client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="widgetId",
+                    field_schema="keyword"
+                )
+                print(f"✅ Created payload index for 'widgetId'")
+            except Exception as e:
+                if "already exists" in str(e).lower():
+                    print(f"✅ Payload index for 'widgetId' already exists")
+                else:
+                    print(f"⚠️ Could not create widgetId index: {e}")
+            
+            # Create index for businessId
+            try:
+                self.qdrant_client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="businessId",
+                    field_schema="keyword"
+                )
+                print(f"✅ Created payload index for 'businessId'")
+            except Exception as e:
+                if "already exists" in str(e).lower():
+                    print(f"✅ Payload index for 'businessId' already exists")
+                else:
+                    print(f"⚠️ Could not create businessId index: {e}")
+            
+            # Create index for itemId
+            try:
+                self.qdrant_client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="itemId",
+                    field_schema="keyword"
+                )
+                print(f"✅ Created payload index for 'itemId'")
+            except Exception as e:
+                if "already exists" in str(e).lower():
+                    print(f"✅ Payload index for 'itemId' already exists")
+                else:
+                    print(f"⚠️ Could not create itemId index: {e}")
+                    
+        except Exception as e:
+            print(f"❌ Error creating payload indexes: {e}")
             raise
     
     def get_embeddings(self, model: str = "text-embedding-3-large"):

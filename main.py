@@ -5,10 +5,12 @@ from app.main import app
 
 if __name__ == "__main__":
     import uvicorn
+    import os
+    port = int(os.getenv("PORT", 8080))
     uvicorn.run(
-        "main:app",
+        "app.main:app",
         host="0.0.0.0",
-        port=8001,
-        reload=True,
+        port=port,
+        reload=False,  # Disable reload in production
         log_level="info"
     )

@@ -139,11 +139,27 @@ class QdrantService:
             print("✅ Qdrant service initialized successfully")
             
         except Exception as e:
-            print(f"❌ Error initializing Qdrant: {e}")
-            raise
+            print(f"⚠️ Warning: Could not connect to Qdrant during startup: {e}")
+            print("🔄 Qdrant will be initialized on-demand when first used")
+            self.qdrant_client = None
+
+    def _ensure_client_connected(self):
+        """Ensure Qdrant client is connected, reconnect if needed"""
+        if self.qdrant_client is None:
+            try:
+                print(f"🔄 Reconnecting to Qdrant at {QDRANT_URL}...")
+                self.qdrant_client = QdrantClient(
+                    url=QDRANT_URL,
+                    api_key=QDRANT_API_KEY,
+                )
+                print("✅ Qdrant client reconnected")
+            except Exception as e:
+                print(f"❌ Failed to reconnect to Qdrant: {e}")
+                raise Exception(f"Qdrant connection failed: {e}")
 
     def _ensure_collection_exists(self, vector_size: int):
         """Ensure the collection exists with both dense and sparse vectors for hybrid search"""
+        self._ensure_client_connected()
         try:
             # Check if collection exists
             collections = self.qdrant_client.get_collections()
@@ -721,8 +737,7 @@ class QdrantService:
     def get_collection_stats(self) -> Dict[str, Any]:
         """Get Qdrant collection statistics"""
         try:
-            if not self.qdrant_client:
-                raise Exception("Qdrant client not initialized")
+            self._ensure_client_connected()
             
             collection_info = self.qdrant_client.get_collection(self.collection_name)
             

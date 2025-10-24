@@ -23,7 +23,7 @@ from qdrant_client.models import (
     FusionQuery,
     Fusion
 )
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 import PyPDF2
 import pdfplumber

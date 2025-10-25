@@ -15,6 +15,9 @@ COPY requirements-pinecone.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements-pinecone.txt
 
+# Verify uvicorn is installed
+RUN python -c "import uvicorn; print('uvicorn installed successfully')"
+
 # Copy application code
 COPY . .
 

@@ -15,11 +15,23 @@ class OpenRouterService:
         self.site_name = OPENROUTER_SITE_NAME
         self.base_url = "https://openrouter.ai/api/v1"
         
-        # Initialize OpenAI client for OpenRouter
-        self.client = OpenAI(
-            base_url=self.base_url,
-            api_key=self.api_key,
-        )
+        # Validate API key
+        if not self.api_key or self.api_key == "your-openrouter-api-key-here":
+            print("❌ OpenRouter API key not configured!")
+            print("💡 Please set OPENROUTER_API_KEY in your environment variables")
+            self.client = None
+            return
+        
+        try:
+            # Initialize OpenAI client for OpenRouter
+            self.client = OpenAI(
+                base_url=self.base_url,
+                api_key=self.api_key,
+            )
+            print("✅ OpenRouter service initialized successfully")
+        except Exception as e:
+            print(f"❌ Failed to initialize OpenRouter service: {e}")
+            self.client = None
 
     def generate_response(
         self, 
@@ -31,6 +43,13 @@ class OpenRouterService:
     ) -> Dict[str, Any]:
         """Generate AI response using OpenRouter API with OpenAI client"""
         try:
+            # Check if client is initialized
+            if self.client is None:
+                return {
+                    "success": False,
+                    "error": "OpenRouter API key not configured. Please set OPENROUTER_API_KEY in your environment variables.",
+                    "content": None
+                }
             # Prepare messages
             messages = []
             
@@ -124,6 +143,13 @@ class OpenRouterService:
     ) -> Dict[str, Any]:
         """Generate AI response with RAG context using OpenRouter API"""
         try:
+            # Check if client is initialized
+            if self.client is None:
+                return {
+                    "success": False,
+                    "error": "OpenRouter API key not configured. Please set OPENROUTER_API_KEY in your environment variables.",
+                    "content": None
+                }
             # Get base system prompt from preset
             base_system_prompt = self.get_system_prompt_text(system_prompt_type, custom_system_prompt)
             

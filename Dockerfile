@@ -19,10 +19,10 @@ RUN pip install --no-cache-dir -r requirements-pinecone.txt
 COPY . .
 
 # Expose the port that Cloud Run will use
-EXPOSE 8080
+EXPOSE 8001
 
 # Set environment variables
-ENV PORT=8080
+ENV PORT=8001
 ENV HOST=0.0.0.0
 
 # Run the application using the main.py entry point

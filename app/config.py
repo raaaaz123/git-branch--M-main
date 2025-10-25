@@ -19,8 +19,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "pa-FWgqHx-CbvS36MJZvGMxaOFNmo8RzH0pMkcos6DmseR")
 
 # OpenRouter Configuration
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "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")
-OPENROUTER_SITE_URL = os.getenv("OPENROUTER_SITE_URL", "http://localhost:3000")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_SITE_URL = os.getenv("OPENROUTER_SITE_URL", "https://ai-native-crm.vercel.app")
 OPENROUTER_SITE_NAME = os.getenv("OPENROUTER_SITE_NAME", "Rexa Engage")
 
 # Firebase Configuration
@@ -42,4 +42,4 @@ ALLOWED_ORIGINS.append("*")
 
 # API Configuration
 API_HOST = os.getenv("HOST", "0.0.0.0")
-API_PORT = int(os.getenv("PORT", 8080))
+API_PORT = int(os.getenv("PORT", 8001))

@@ -26,4 +26,5 @@ ENV PORT=8001
 ENV HOST=0.0.0.0
 
 # Run the application using the main.py entry point
+# Cloud Run will set PORT environment variable
 CMD ["python", "main.py"]

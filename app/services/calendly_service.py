@@ -31,21 +31,23 @@ class CalendlyService:
                 raise ValueError("CALENDLY_CLIENT_ID is not set in environment variables")
             if not self.redirect_uri:
                 raise ValueError("CALENDLY_REDIRECT_URI is not set in environment variables")
-            
-        params = {
-            "client_id": self.client_id,
-            "response_type": "code",
-            "redirect_uri": self.redirect_uri,
-            "scope": "default"
-        }
-        
-        if state:
-            params["state"] = state
-            
+            # Build OAuth URL parameters
+            params = {
+                "client_id": self.client_id,
+                "response_type": "code",
+                "redirect_uri": self.redirect_uri,
+                "scope": "default"
+            }
+
+            # Optional state parameter
+            if state:
+                params["state"] = state
+
+            # Construct full authorization URL
             oauth_url = f"https://auth.calendly.com/oauth/authorize?{urlencode(params)}"
             logger.info(f"✅ OAuth URL generated: {oauth_url[:100]}...")
             return oauth_url
-            
+
         except Exception as e:
             logger.error(f"❌ Error generating OAuth URL: {str(e)}")
             logger.exception(e)

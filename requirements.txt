@@ -1,0 +1,2 @@
+# Buildpacks and platforms expecting requirements.txt will install from here
+-r requirements-pinecone.txt

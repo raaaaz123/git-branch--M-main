@@ -1,5 +1,5 @@
 """
-Router for website scraping functionality
+Clean and simple router for website scraping using Crawl4AI
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -15,195 +15,240 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
 class WebsiteScrapingRequest(BaseModel):
+    """Request model for website scraping"""
     url: str
-    widget_id: str
+    agent_id: Optional[str] = None
+    widget_id: Optional[str] = None
+    workspace_id: Optional[str] = None
     title: str
-    max_pages: Optional[int] = 50
     metadata: Optional[Dict[str, Any]] = {}
     embedding_model: str = "text-embedding-3-large"
 
     class Config:
         extra = "allow"
 
+
 @router.post("/scrape-website")
 async def scrape_website(request: WebsiteScrapingRequest):
-    """Scrape a website and store in Pinecone"""
+    """
+    Scrape a website and store in Qdrant vector database
+
+    This endpoint:
+    1. Scrapes the website using Crawl4AI
+    2. Splits content into chunks
+    3. Stores chunks in Qdrant with embeddings
+    4. Saves metadata to Firestore
+    """
     try:
         logger.info(f"Starting website scraping for: {request.url}")
-        
-        # Scrape the website
-        scraping_result = scraper.scrape_website(request.url, request.max_pages)
-        
+
+        # Scrape the website using Crawl4AI
+        scraping_result = await scraper.scrape_website(
+            url=request.url,
+            title=request.title
+        )
+
         if not scraping_result['success']:
-            raise HTTPException(status_code=400, detail=f"Failed to scrape website: {scraping_result.get('error', 'Unknown error')}")
-        
-        # Prepare content for Pinecone
-        content = scraping_result['content']
-        logger.info(f"Raw content length: {len(content)}")
-        logger.info(f"Content preview: {content[:200]}...")
-        
-        if not content.strip():
-            raise HTTPException(status_code=400, detail="No content found on the website")
-        
-        # Split content into chunks for better vectorization
-        chunks = split_content_into_chunks(content, max_chunk_size=1000)
-        logger.info(f"Content length: {len(content)}, Chunks created: {len(chunks)}")
-        logger.info(f"Chunks: {chunks}")
-        
-        # If no chunks were created (content too short), create a single chunk
-        if not chunks and content.strip():
-            chunks = [content.strip()]
-            logger.info(f"Created single chunk for short content: {len(chunks[0])} chars")
-        
-        # Always create at least one chunk if we have content
-        if not chunks and content.strip():
-            chunks = [content.strip()]
-            logger.info(f"Force created single chunk: {len(chunks[0])} chars")
-        
-        # Store each chunk in Pinecone
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to scrape website: {scraping_result.get('error', 'Unknown error')}"
+            )
+
+        chunks = scraping_result.get('chunks', [])
+
+        if not chunks:
+            raise HTTPException(
+                status_code=400,
+                detail="No content chunks created from website"
+            )
+
+        logger.info(f"Successfully scraped website: {len(chunks)} chunks created")
+
+        # Store chunks in Qdrant
         stored_chunks = []
-        for i, chunk in enumerate(chunks):
+        failed_chunks = []
+
+        for i, chunk in enumerate(chunks, 1):
             try:
-                # Create metadata for the chunk
+                # Prepare metadata
                 chunk_metadata = {
+                    'agent_id': request.agent_id,
                     'widget_id': request.widget_id,
+                    'workspace_id': request.workspace_id,
                     'title': request.title,
                     'url': request.url,
-                    'chunk_index': i,
+                    'source_url': chunk.get('source_url', request.url),
+                    'source_title': chunk.get('source_title', request.title),
+                    'chunk_index': chunk.get('chunk_index', i - 1),
                     'total_chunks': len(chunks),
-                    'source_type': 'website',
+                    'char_count': chunk.get('char_count', len(chunk['text'])),
+                    'word_count': chunk.get('word_count', len(chunk['text'].split())),
+                    'type': 'website',
                     'scraped_at': str(int(time.time())),
                     **request.metadata
                 }
-                
+
+                # Generate unique vector ID
+                vector_id = f"{request.workspace_id or request.widget_id}_{chunk.get('id', i)}_{int(time.time())}"
+
                 # Set embedding model
                 qdrant_service.set_embedding_model(request.embedding_model)
-                
+
                 # Store in Qdrant
                 result = qdrant_service.store_knowledge_item({
-                    'id': f"{request.widget_id}_{i}",
-                    'businessId': request.metadata.get('business_id', ''),
-                    'widgetId': request.widget_id,
+                    'id': vector_id,
+                    'businessId': request.workspace_id or request.metadata.get('business_id', ''),
+                    'widgetId': request.widget_id or '',
+                    'agentId': request.agent_id or '',
+                    'workspaceId': request.workspace_id or '',
                     'title': request.title,
-                    'content': chunk,
+                    'content': chunk['text'],
                     'type': 'website',
                     **chunk_metadata
                 })
-                
-                if result['success']:
+
+                if result.get('success'):
+                    # Get the first point_id or generate one from the result
+                    point_ids = result.get('point_ids', [])
+                    vector_id = point_ids[0] if point_ids else f"{vector_id}_stored"
+
                     stored_chunks.append({
-                        'chunk_index': i,
-                        'vector_id': result['vector_id'],
-                        'content_preview': chunk[:100] + '...' if len(chunk) > 100 else chunk
+                        'vector_id': vector_id,
+                        'chunk_index': chunk.get('chunk_index', i - 1),
+                        'source_url': chunk.get('source_url', request.url),
+                        'source_title': chunk.get('source_title', request.title),
+                        'char_count': chunk.get('char_count'),
+                        'word_count': chunk.get('word_count'),
+                        'content_preview': chunk['text'][:150] + '...'
                     })
-                
+
+                    logger.info(f"✅ [{i}/{len(chunks)}] Stored chunk to Qdrant")
+                else:
+                    failed_chunks.append({
+                        'chunk_index': i,
+                        'error': result.get('error', result.get('message', 'Unknown error'))
+                    })
+                    logger.warning(f"⚠️  [{i}/{len(chunks)}] Failed to store: {result.get('error', result.get('message'))}")
+
             except Exception as e:
-                logger.error(f"Error storing chunk {i}: {str(e)}")
-                continue
-        
-        # Store scraped website data in Firestore
-        firestore_result = firestore_service.store_scraped_website({
-            'url': request.url,
-            'widget_id': request.widget_id,
-            'title': request.title,
-            'content': content,
-            'total_pages': scraping_result['total_pages'],
-            'successful_pages': scraping_result['successful_pages'],
-            'total_word_count': scraping_result['total_word_count'],
-            'chunks_created': len(stored_chunks),
-            'metadata': request.metadata
-        })
-        
-        # Store knowledge chunks metadata in Firestore
-        if stored_chunks:
-            chunks_for_firestore = []
-            for chunk in stored_chunks:
-                chunks_for_firestore.append({
-                    'widget_id': request.widget_id,
-                    'vector_id': chunk['vector_id'],
-                    'chunk_index': chunk['chunk_index'],
-                    'content_preview': chunk['content_preview'],
-                    'url': request.url,
-                    'title': request.title,
-                    'metadata': request.metadata
+                failed_chunks.append({
+                    'chunk_index': i,
+                    'error': str(e)
                 })
-            
-            firestore_chunks_result = firestore_service.store_knowledge_chunks(chunks_for_firestore)
-            logger.info(f"Firestore chunks storage result: {firestore_chunks_result}")
-        
-        logger.info(f"Firestore website storage result: {firestore_result}")
-        
+                logger.error(f"❌ [{i}/{len(chunks)}] Error: {str(e)}")
+                continue
+
+        if not stored_chunks:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to store any chunks in Qdrant. Errors: {failed_chunks[:3]}"
+            )
+
+        logger.info(f"Stored {len(stored_chunks)} chunks successfully in Qdrant")
+
+        # Store in Firestore for tracking
+        try:
+            firestore_result = firestore_service.store_scraped_website({
+                'url': request.url,
+                'agent_id': request.agent_id,
+                'widget_id': request.widget_id,
+                'workspace_id': request.workspace_id,
+                'title': request.title,
+                'content': scraping_result.get('content', '')[:10000],  # Store preview
+                'total_pages': scraping_result.get('total_pages', 1),
+                'successful_pages': scraping_result.get('successful_pages', 1),
+                'total_word_count': scraping_result.get('total_word_count', 0),
+                'total_char_count': scraping_result.get('total_char_count', 0),
+                'chunks_created': len(stored_chunks),
+                'metadata': request.metadata
+            })
+
+            logger.info(f"Firestore storage result: {firestore_result}")
+
+            # Store chunk metadata
+            if stored_chunks:
+                chunks_for_firestore = []
+                for chunk in stored_chunks:
+                    chunks_for_firestore.append({
+                        'agent_id': request.agent_id,
+                        'widget_id': request.widget_id,
+                        'workspace_id': request.workspace_id,
+                        'vector_id': chunk['vector_id'],
+                        'chunk_index': chunk['chunk_index'],
+                        'source_url': chunk['source_url'],
+                        'source_title': chunk['source_title'],
+                        'char_count': chunk['char_count'],
+                        'word_count': chunk['word_count'],
+                        'content_preview': chunk['content_preview'],
+                        'url': request.url,
+                        'title': request.title,
+                        'metadata': request.metadata
+                    })
+
+                firestore_chunks_result = firestore_service.store_knowledge_chunks(chunks_for_firestore)
+                logger.info(f"Stored {len(chunks_for_firestore)} chunk records in Firestore")
+
+        except Exception as e:
+            logger.warning(f"Firestore storage failed (non-critical): {str(e)}")
+
+        # Return success response
         return {
             'success': True,
             'message': f'Website scraped and stored successfully',
             'data': {
                 'url': request.url,
                 'title': request.title,
-                'total_pages': scraping_result['total_pages'],
-                'successful_pages': scraping_result['successful_pages'],
-                'total_word_count': scraping_result['total_word_count'],
+                'total_pages': scraping_result.get('total_pages', 1),
+                'successful_pages': scraping_result.get('successful_pages', 1),
+                'total_word_count': scraping_result.get('total_word_count', 0),
+                'total_char_count': scraping_result.get('total_char_count', 0),
                 'chunks_created': len(stored_chunks),
-                'chunks': stored_chunks
+                'chunks_failed': len(failed_chunks),
+                'elapsed_time': scraping_result.get('elapsed_time', 0),
+                'chunks': stored_chunks[:10]  # First 10 for preview
             }
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in scrape_website: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        logger.exception(e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
 
-def split_content_into_chunks(content: str, max_chunk_size: int = 1000) -> list:
-    """Split content into chunks for better vectorization"""
-    if not content or not content.strip():
-        return []
-    
-    content = content.strip()
-    
-    # Always return at least one chunk if there's content
-    if len(content) <= max_chunk_size:
-        return [content]
-    
-    # Split by paragraphs first
-    paragraphs = content.split('\n\n')
-    chunks = []
-    current_chunk = ""
-    
-    for paragraph in paragraphs:
-        paragraph = paragraph.strip()
-        if not paragraph:
-            continue
-            
-        # If adding this paragraph would exceed max_chunk_size, save current chunk
-        if len(current_chunk) + len(paragraph) > max_chunk_size and current_chunk:
-            chunks.append(current_chunk.strip())
-            current_chunk = paragraph
-        else:
-            current_chunk += "\n\n" + paragraph if current_chunk else paragraph
-    
-    # Add the last chunk
-    if current_chunk.strip():
-        chunks.append(current_chunk.strip())
-    
-    # Ensure we always return at least one chunk if there's content
-    if not chunks and content:
-        chunks = [content]
-    
-    return chunks
 
-@router.get("/scraping-status/{widget_id}")
-async def get_scraping_status(widget_id: str):
-    """Get scraping status for a widget"""
+@router.get("/scraping-status")
+async def get_scraping_status(
+    agent_id: Optional[str] = None,
+    widget_id: Optional[str] = None,
+    workspace_id: Optional[str] = None
+):
+    """
+    Get scraping status and list of scraped websites
+    """
     try:
-        # Query Pinecone for website content
+        # Build filter based on provided IDs
+        filter_dict = {"type": "website"}
+
+        if agent_id:
+            filter_dict["agent_id"] = agent_id
+        elif widget_id:
+            filter_dict["widget_id"] = widget_id
+        elif workspace_id:
+            filter_dict["workspace_id"] = workspace_id
+
+        # Query Qdrant for website content
         results = qdrant_service.search_knowledge_base(
             query="",
-            widget_id=widget_id,
-            filter={"source_type": "website"},
+            filter=filter_dict,
             top_k=100
         )
-        
+
         if results['success']:
             website_items = results['data']
             return {
@@ -216,12 +261,16 @@ async def get_scraping_status(widget_id: str):
         else:
             return {
                 'success': False,
-                'error': results['error']
+                'error': results.get('error', 'Unknown error')
             }
-            
+
     except Exception as e:
         logger.error(f"Error getting scraping status: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
 
 @router.post("/test-scraping")
 async def test_scraping():
@@ -229,19 +278,23 @@ async def test_scraping():
     try:
         # Test with a simple website
         test_url = "https://example.com"
-        result = scraper.scrape_website(test_url, max_pages=1)
-        
+        result = await scraper.scrape_website(url=test_url, title="Example Website")
+
         return {
             'success': True,
             'message': 'Scraping test completed',
             'data': {
                 'url': test_url,
                 'success': result['success'],
-                'content_length': len(result['content']),
-                'word_count': result['total_word_count']
+                'content_length': len(result.get('content', '')),
+                'word_count': result.get('total_word_count', 0),
+                'chunks_created': len(result.get('chunks', []))
             }
         }
-        
+
     except Exception as e:
         logger.error(f"Error in test_scraping: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )

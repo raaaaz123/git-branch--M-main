@@ -1,24 +1,83 @@
 """
 Notion Integration Service
 Fetches and processes content from Notion workspaces
+Supports both OAuth and API key authentication
 """
 import requests
 from typing import List, Dict, Any, Optional
 import os
+import base64
 
 
 class NotionService:
     def __init__(self):
         self.api_version = "2022-06-28"
         self.base_url = "https://api.notion.com/v1"
+        self.oauth_base_url = "https://api.notion.com/v1/oauth"
     
     def _get_headers(self, api_key: str) -> Dict[str, str]:
-        """Get headers for Notion API requests"""
+        """Get headers for Notion API requests (supports both OAuth tokens and API keys)"""
         return {
             "Authorization": f"Bearer {api_key}",
             "Notion-Version": self.api_version,
             "Content-Type": "application/json"
         }
+
+    def exchange_code_for_token(
+        self,
+        code: str,
+        client_id: str,
+        client_secret: str,
+        redirect_uri: str
+    ) -> Dict[str, Any]:
+        """
+        Exchange OAuth authorization code for access token
+        This is called after user authorizes the app in Notion
+        """
+        try:
+            # Encode client credentials
+            credentials = f"{client_id}:{client_secret}"
+            encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
+            # Exchange code for token
+            response = requests.post(
+                f"{self.oauth_base_url}/token",
+                headers={
+                    "Authorization": f"Basic {encoded_credentials}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": redirect_uri
+                },
+                timeout=10
+            )
+
+            if response.status_code != 200:
+                return {
+                    "success": False,
+                    "error": f"Token exchange failed: {response.status_code} - {response.text}"
+                }
+
+            token_data = response.json()
+
+            return {
+                "success": True,
+                "access_token": token_data.get("access_token"),
+                "workspace_id": token_data.get("workspace_id"),
+                "workspace_name": token_data.get("workspace_name"),
+                "workspace_icon": token_data.get("workspace_icon"),
+                "bot_id": token_data.get("bot_id"),
+                "owner": token_data.get("owner"),
+                "duplicated_template_id": token_data.get("duplicated_template_id")
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Error exchanging code for token: {str(e)}"
+            }
     
     def test_connection(self, api_key: str) -> Dict[str, Any]:
         """Test Notion API connection"""

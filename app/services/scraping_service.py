@@ -1,241 +1,237 @@
 """
-Website scraping service for knowledge base
+Clean and simple website scraping service using Crawl4AI
 """
-import requests
-from bs4 import BeautifulSoup
-import re
-from urllib.parse import urljoin, urlparse
-from typing import List, Dict, Any
-import time
+import asyncio
 import logging
+import time
+import sys
+import requests
+from typing import Dict, Any, List, Optional
+from bs4 import BeautifulSoup
+from markdownify import markdownify as md
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 logger = logging.getLogger(__name__)
 
+# Fix for Windows event loop issues with Playwright
+if sys.platform == 'win32':
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except AttributeError:
+        pass  # Not available in older Python versions
+
+
 class WebsiteScraper:
+    """Simple website scraper with Crawl4AI and fallback"""
+
     def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        })
-        
-    def clean_text(self, text: str) -> str:
-        """Clean and preprocess text content"""
-        if not text:
-            return ""
-        
-        # Remove extra whitespace and normalize
-        text = re.sub(r'\s+', ' ', text)
-        text = text.strip()
-        
-        # Remove common unwanted patterns
-        unwanted_patterns = [
-            r'Cookie\s+Policy',
-            r'Privacy\s+Policy',
-            r'Terms\s+of\s+Service',
-            r'Subscribe\s+to\s+our\s+newsletter',
-            r'Follow\s+us\s+on',
-            r'Share\s+this\s+page',
-            r'Back\s+to\s+top',
-            r'Skip\s+to\s+content',
-            r'Menu',
-            r'Navigation',
-            r'Search',
-            r'Login',
-            r'Sign\s+up',
-            r'Contact\s+us',
-            r'About\s+us',
-            r'Home',
-            r'Blog',
-            r'News',
-            r'Products',
-            r'Services',
-            r'Support',
-            r'Help',
-            r'FAQ',
-            r'Legal',
-            r'Copyright',
-            r'All\s+rights\s+reserved',
-            r'Powered\s+by',
-            r'Built\s+with',
-            r'©\s+\d{4}',
-            r'\d{4}\s+©',
-        ]
-        
-        for pattern in unwanted_patterns:
-            text = re.sub(pattern, '', text, flags=re.IGNORECASE)
-        
-        # Remove very short lines (likely navigation/UI elements)
-        lines = text.split('\n')
-        cleaned_lines = []
-        for line in lines:
-            line = line.strip()
-            if len(line) > 10:  # Keep lines longer than 10 characters
-                cleaned_lines.append(line)
-        
-        return '\n'.join(cleaned_lines)
-    
-    def extract_links(self, soup: BeautifulSoup, base_url: str) -> List[str]:
-        """Extract all internal links from the page"""
-        links = []
-        for link in soup.find_all('a', href=True):
-            href = link['href']
-            full_url = urljoin(base_url, href)
-            
-            # Only include internal links
-            if self.is_internal_link(full_url, base_url):
-                links.append(full_url)
-        
-        return list(set(links))  # Remove duplicates
-    
-    def is_internal_link(self, url: str, base_url: str) -> bool:
-        """Check if URL is internal to the website"""
+        self.chunk_size = 800
+        self.chunk_overlap = 200
+
+    async def scrape_website(
+        self,
+        url: str,
+        max_pages: int = 50,
+        title: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Scrape a website using Crawl4AI with fallback to simple HTTP scraping
+
+        Args:
+            url: Website URL to scrape
+            max_pages: Maximum number of pages (not used in simple mode, kept for compatibility)
+            title: Optional title for the scraped content
+
+        Returns:
+            Dictionary with scraping results including chunks ready for vector storage
+        """
         try:
-            base_domain = urlparse(base_url).netloc
-            url_domain = urlparse(url).netloc
-            return base_domain == url_domain
-        except:
-            return False
-    
-    def scrape_page(self, url: str) -> Dict[str, Any]:
-        """Scrape a single page"""
-        try:
-            response = self.session.get(url, timeout=30)
-            response.raise_for_status()
-            
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Remove script and style elements
-            for script in soup(["script", "style", "nav", "footer", "header"]):
-                script.decompose()
-            
-            # Extract title
-            title = soup.find('title')
-            title_text = title.get_text().strip() if title else ""
-            
-            # Extract main content
-            main_content = soup.find('main') or soup.find('article') or soup.find('div', class_=re.compile(r'content|main|body'))
-            
-            if main_content:
-                content = main_content.get_text()
-            else:
-                content = soup.get_text()
-            
-            # Clean the content
-            cleaned_content = self.clean_text(content)
-            
-            # Extract meta description
-            meta_desc = soup.find('meta', attrs={'name': 'description'})
-            description = meta_desc.get('content', '') if meta_desc else ""
-            
-            # Extract headings
-            headings = []
-            for tag in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
-                for heading in soup.find_all(tag):
-                    heading_text = heading.get_text().strip()
-                    if heading_text and len(heading_text) > 3:
-                        headings.append({
-                            'level': int(tag[1]),
-                            'text': heading_text
-                        })
-            
+            start_time = time.time()
+
+            logger.info("=" * 80)
+            logger.info(f"🚀 STARTING WEB SCRAPE")
+            logger.info(f"   URL: {url}")
+            logger.info(f"   Title: {title or 'Auto-detect'}")
+            logger.info("=" * 80)
+
+            # Try Crawl4AI first
+            try:
+                logger.info("🔍 Attempting scrape with Crawl4AI...")
+                from crawl4ai import AsyncWebCrawler
+
+                async with AsyncWebCrawler() as crawler:
+                    result = await crawler.arun(url=url)
+
+                    if not result or not result.markdown:
+                        raise Exception("No content extracted from URL")
+
+                    content = result.markdown
+                    page_title = title or result.metadata.get('title', 'Untitled')
+
+                    logger.info(f"✅ Crawl4AI extraction successful")
+
+            except Exception as crawl_error:
+                logger.warning(f"⚠️  Crawl4AI failed: {str(crawl_error)}")
+                logger.info("🔄 Falling back to simple HTTP scraper...")
+
+                # Fallback to simple HTTP scraping
+                content, page_title = self._simple_http_scrape(url, title)
+
+            logger.info(f"✅ Content extracted successfully")
+            logger.info(f"   Title: {page_title}")
+            logger.info(f"   Content length: {len(content)} characters")
+            logger.info(f"   Word count: {len(content.split())} words")
+
+            # Split content into chunks
+            logger.info("📦 Creating chunks...")
+            chunks = self._create_chunks(
+                content=content,
+                url=url,
+                title=page_title
+            )
+
+            elapsed = time.time() - start_time
+
+            logger.info("")
+            logger.info("=" * 80)
+            logger.info(f"✅ SCRAPING COMPLETED SUCCESSFULLY")
+            logger.info(f"   Total Pages: 1")
+            logger.info(f"   Total Words: {len(content.split()):,}")
+            logger.info(f"   Chunks Created: {len(chunks)}")
+            logger.info(f"   Time Taken: {elapsed:.1f}s")
+            logger.info("=" * 80)
+
             return {
-                'url': url,
-                'title': title_text,
-                'content': cleaned_content,
-                'description': description,
-                'headings': headings,
-                'word_count': len(cleaned_content.split()),
-                'success': True
+                'success': True,
+                'base_url': url,
+                'total_pages': 1,
+                'successful_pages': 1,
+                'total_word_count': len(content.split()),
+                'total_char_count': len(content),
+                'content': content,
+                'chunks': chunks,
+                'title': page_title,
+                'elapsed_time': elapsed
             }
-            
+
         except Exception as e:
-            logger.error(f"Error scraping {url}: {str(e)}")
+            logger.error(f"❌ SCRAPING FAILED: {str(e)}")
+            logger.exception(e)
             return {
-                'url': url,
-                'title': '',
-                'content': '',
-                'description': '',
-                'headings': [],
-                'word_count': 0,
                 'success': False,
-                'error': str(e)
-            }
-    
-    def scrape_website(self, base_url: str, max_pages: int = 50) -> Dict[str, Any]:
-        """Scrape entire website starting from base URL"""
-        try:
-            # Start with the base URL
-            pages_to_scrape = [base_url]
-            scraped_pages = []
-            visited_urls = set()
-            
-            while pages_to_scrape and len(scraped_pages) < max_pages:
-                current_url = pages_to_scrape.pop(0)
-                
-                if current_url in visited_urls:
-                    continue
-                
-                visited_urls.add(current_url)
-                
-                logger.info(f"Scraping: {current_url}")
-                
-                # Scrape the current page
-                page_data = self.scrape_page(current_url)
-                scraped_pages.append(page_data)
-                
-                if page_data['success']:
-                    # Extract links from the page
-                    soup = BeautifulSoup(self.session.get(current_url).content, 'html.parser')
-                    links = self.extract_links(soup, base_url)
-                    
-                    # Add new links to the queue
-                    for link in links:
-                        if link not in visited_urls and link not in pages_to_scrape:
-                            pages_to_scrape.append(link)
-                
-                # Add delay to be respectful
-                time.sleep(1)
-            
-            # Combine all content
-            all_content = []
-            all_headings = []
-            total_word_count = 0
-            
-            for page in scraped_pages:
-                if page['success'] and page['content']:
-                    all_content.append(f"# {page['title']}\n\n{page['content']}\n\n---\n")
-                    all_headings.extend(page['headings'])
-                    total_word_count += page['word_count']
-            
-            combined_content = '\n'.join(all_content)
-            
-            logger.info(f"Scraped content length: {len(combined_content)}")
-            logger.info(f"Content preview: {combined_content[:200]}...")
-            
-            return {
-                'base_url': base_url,
-                'total_pages': len(scraped_pages),
-                'successful_pages': len([p for p in scraped_pages if p['success']]),
-                'total_word_count': total_word_count,
-                'content': combined_content,
-                'headings': all_headings,
-                'pages': scraped_pages,
-                'success': True
-            }
-            
-        except Exception as e:
-            logger.error(f"Error scraping website {base_url}: {str(e)}")
-            return {
-                'base_url': base_url,
+                'error': str(e),
                 'total_pages': 0,
-                'successful_pages': 0,
-                'total_word_count': 0,
-                'content': '',
-                'headings': [],
-                'pages': [],
-                'success': False,
-                'error': str(e)
+                'chunks': []
             }
+
+    def _simple_http_scrape(self, url: str, title: Optional[str] = None) -> tuple[str, str]:
+        """
+        Simple HTTP-based scraping using requests and BeautifulSoup
+
+        Args:
+            url: URL to scrape
+            title: Optional title override
+
+        Returns:
+            Tuple of (markdown_content, page_title)
+        """
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        # Remove unwanted elements
+        for element in soup(['script', 'style', 'nav', 'footer', 'header', 'aside', 'iframe', 'noscript']):
+            element.decompose()
+
+        # Extract title
+        if title:
+            page_title = title
+        else:
+            title_tag = soup.find('title')
+            page_title = title_tag.get_text().strip() if title_tag else 'Untitled'
+
+        # Find main content
+        main_content = (
+            soup.find('main') or
+            soup.find('article') or
+            soup.find('div', class_=['content', 'main-content', 'post-content', 'article-content']) or
+            soup.find('body')
+        )
+
+        if not main_content:
+            raise Exception("Could not find main content on page")
+
+        # Convert to markdown
+        html_content = str(main_content)
+        markdown_content = md(html_content, heading_style="ATX")
+
+        # Clean up the markdown
+        lines = markdown_content.split('\n')
+        cleaned_lines = [line for line in lines if line.strip()]
+        markdown_content = '\n\n'.join(cleaned_lines)
+
+        return markdown_content, page_title
+
+    def _create_chunks(
+        self,
+        content: str,
+        url: str,
+        title: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Split content into chunks using LangChain's text splitter
+
+        Args:
+            content: The markdown content to chunk
+            url: Source URL
+            title: Page title
+
+        Returns:
+            List of chunk dictionaries with metadata
+        """
+        try:
+            # Use LangChain's recursive character text splitter
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=self.chunk_size,
+                chunk_overlap=self.chunk_overlap,
+                length_function=len,
+                separators=["\n\n", "\n", ". ", " ", ""]
+            )
+
+            # Split the content
+            text_chunks = text_splitter.split_text(content)
+
+            # Create chunk objects with metadata
+            chunks = []
+            for i, chunk_text in enumerate(text_chunks):
+                if len(chunk_text.strip()) < 50:  # Skip very small chunks
+                    continue
+
+                chunks.append({
+                    'id': f"{url}_{i}",
+                    'text': chunk_text.strip(),
+                    'source_url': url,
+                    'source_title': title,
+                    'chunk_index': i,
+                    'total_chunks': len(text_chunks),
+                    'char_count': len(chunk_text),
+                    'word_count': len(chunk_text.split())
+                })
+
+            logger.info(f"   ✓ Created {len(chunks)} chunks")
+            logger.info(f"   ✓ Average chunk size: {sum(c['char_count'] for c in chunks) // len(chunks) if chunks else 0} chars")
+
+            return chunks
+
+        except Exception as e:
+            logger.error(f"Error creating chunks: {str(e)}")
+            return []
+
 
 # Global scraper instance
 scraper = WebsiteScraper()

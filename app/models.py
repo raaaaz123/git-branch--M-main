@@ -9,7 +9,8 @@ from typing import List, Optional, Dict, Any
 class KnowledgeBaseItem(BaseModel):
     id: str
     businessId: str
-    widgetId: str
+    widgetId: Optional[str] = None
+    agentId: Optional[str] = None
     title: str
     content: str
     type: str
@@ -29,6 +30,9 @@ class DocumentUploadResponse(BaseModel):
     message: str
     id: str
     processing_status: str = "completed"
+    fileUrl: Optional[str] = None
+    fileName: Optional[str] = None
+    fileSize: Optional[int] = None
 
 
 # AI Models
@@ -38,7 +42,7 @@ class CustomerHandoverConfig(BaseModel):
     handoverButtonText: str = "Talk to Human Agent"
     handoverButtonPosition: str = "bottom"
     includeInQuickReplies: bool = True
-    autoDetectKeywords: bool = True
+    autoDetectKeywords: bool = False
     detectionKeywords: List[str] = []
     handoverMessage: str = "I'll connect you with a human agent right away."
     notificationToAgent: bool = True
@@ -56,18 +60,19 @@ class AIConfig(BaseModel):
     maxRetrievalDocs: int = 5
     ragEnabled: bool = True
     fallbackToHuman: bool = True
-    embeddingProvider: str = "openai"  # Embedding provider: openai or voyage
-    embeddingModel: str = "text-embedding-3-large"  # OpenAI: text-embedding-3-large/small/ada-002, Voyage: voyage-3
+    embeddingProvider: str = "voyage"  # FORCED: Always use Voyage AI
+    embeddingModel: str = "voyage-3-large"  # FORCED: Always use voyage-3-large (1024 dims)
     rerankerEnabled: bool = True  # Enable reranking for better accuracy (95%+ vs 65%)
-    rerankerModel: str = "rerank-2.5"  # Voyage AI reranker model
+    rerankerModel: str = "rerank-2.5-lite"  # FORCED: Always use rerank-2.5-lite
     systemPrompt: str = "support"  # System prompt preset: support, sales, booking, technical, custom
     customSystemPrompt: str = ""
 
 
 class ChatRequest(BaseModel):
     message: str
-    widgetId: str
-    conversationId: str
+    widgetId: Optional[str] = None
+    agentId: Optional[str] = None
+    conversationId: Optional[str] = None
     aiConfig: AIConfig
     businessId: Optional[str] = None
     customerName: Optional[str] = None

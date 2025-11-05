@@ -1,5 +1,5 @@
 """
-Knowledge base router for Pinecone operations
+Knowledge base router for Qdrant operations
 """
 from fastapi import APIRouter, HTTPException, File, UploadFile, Form
 from typing import Optional
@@ -8,6 +8,7 @@ import uuid
 
 from app.models import KnowledgeBaseItem, SearchRequest, DocumentUploadResponse
 from app.services.qdrant_service import qdrant_service
+from app.services.r2_service import r2_service
 
 router = APIRouter(prefix="/api/knowledge-base", tags=["knowledge-base"])
 
@@ -28,14 +29,15 @@ async def store_knowledge_item(item: KnowledgeBaseItem, embedding_model: str = "
 
 @router.post("/upload")
 async def upload_document(
-    widget_id: str = Form(...),
+    widget_id: Optional[str] = Form(None),
+    agent_id: Optional[str] = Form(None),
     title: str = Form(...),
     document_type: str = Form(...),
     content: Optional[str] = Form(None),
     metadata: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
-    embedding_provider: Optional[str] = Form("openai"),
-    embedding_model: Optional[str] = Form("text-embedding-3-large")
+    embedding_provider: Optional[str] = Form("voyage"),
+    embedding_model: Optional[str] = Form("voyage-3")
 ):
     """Upload and process documents (text or PDF) to knowledge base"""
     try:
@@ -54,14 +56,31 @@ async def upload_document(
         final_content = content or ""
         file_info = {}
         
+        file_url = None
+        
         if file and document_type == "pdf":
             # Read and process PDF file
             file_content = await file.read()
             file_info = {
                 "fileName": file.filename,
                 "fileSize": len(file_content),
-                "contentType": file.content_type
+                "contentType": file.content_type or "application/pdf"
             }
+            
+            # Upload to R2 storage
+            r2_result = r2_service.upload_file(
+                file_content=file_content,
+                filename=file.filename,
+                content_type=file_info["contentType"],
+                workspace_id=parsed_metadata.get("workspace_id"),
+                agent_id=agent_id
+            )
+            
+            if r2_result["success"]:
+                file_url = r2_result["file_url"]
+                print(f"📦 File uploaded to R2: {file_url}")
+            else:
+                print(f"⚠️ R2 upload failed: {r2_result.get('error')}")
             
             # Extract text from PDF
             extracted_text = qdrant_service.extract_text_from_pdf(file_content)
@@ -75,8 +94,23 @@ async def upload_document(
             file_info = {
                 "fileName": file.filename,
                 "fileSize": len(file_content),
-                "contentType": file.content_type
+                "contentType": file.content_type or "text/plain"
             }
+            
+            # Upload to R2 storage
+            r2_result = r2_service.upload_file(
+                file_content=file_content,
+                filename=file.filename,
+                content_type=file_info["contentType"],
+                workspace_id=parsed_metadata.get("workspace_id"),
+                agent_id=agent_id
+            )
+            
+            if r2_result["success"]:
+                file_url = r2_result["file_url"]
+                print(f"📦 File uploaded to R2: {file_url}")
+            else:
+                print(f"⚠️ R2 upload failed: {r2_result.get('error')}")
             
             try:
                 final_content = file_content.decode('utf-8')
@@ -88,13 +122,15 @@ async def upload_document(
         # Create knowledge base item
         knowledge_item = {
             "id": item_id,
-            "businessId": parsed_metadata.get("business_id", "unknown"),
-            "widgetId": widget_id,
+            "workspaceId": parsed_metadata.get("workspace_id", "unknown"),
+            **({'widgetId': widget_id} if widget_id else {}),
+            **({'agentId': agent_id} if agent_id else {}),
             "title": title,
             "content": final_content,
             "type": document_type,
             "fileName": file_info.get("fileName"),
-            "fileSize": file_info.get("fileSize")
+            "fileSize": file_info.get("fileSize"),
+            **({'fileUrl': file_url} if file_url else {})
         }
         
         # Store in Qdrant
@@ -121,7 +157,10 @@ async def upload_document(
             success=True,
             message=f"Document '{title}' uploaded and vectorized successfully with {embedding_provider}/{embedding_model}",
             id=item_id,
-            processing_status="completed"
+            processing_status="completed",
+            fileUrl=file_url,
+            fileName=file_info.get("fileName"),
+            fileSize=file_info.get("fileSize")
         )
         
     except Exception as e:

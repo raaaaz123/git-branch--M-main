@@ -1,12 +1,15 @@
 """
-Notion integration router
+Notion integration router with OAuth support
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import RedirectResponse
 from typing import Optional
 from pydantic import BaseModel
+import urllib.parse
 
 from app.services.notion_service import notion_service
 from app.services.qdrant_service import qdrant_service
+from app.config import NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, NOTION_REDIRECT_URI
 
 
 router = APIRouter(prefix="/api/notion", tags=["notion"])
@@ -24,21 +27,119 @@ class NotionSearchRequest(BaseModel):
 class NotionImportRequest(BaseModel):
     api_key: str
     page_id: str
-    widget_id: str
+    widget_id: Optional[str] = None
+    agent_id: Optional[str] = None
     title: Optional[str] = None
-    embedding_provider: Optional[str] = "openai"
-    embedding_model: Optional[str] = "text-embedding-3-large"
+    embedding_provider: Optional[str] = "voyage"
+    embedding_model: Optional[str] = "voyage-3"
     metadata: Optional[dict] = {}
 
 
 class NotionDatabaseImportRequest(BaseModel):
     api_key: str
     database_id: str
-    widget_id: str
+    widget_id: Optional[str] = None
+    agent_id: Optional[str] = None
     title: Optional[str] = None
-    embedding_provider: Optional[str] = "openai"
-    embedding_model: Optional[str] = "text-embedding-3-large"
+    embedding_provider: Optional[str] = "voyage"
+    embedding_model: Optional[str] = "voyage-3"
     metadata: Optional[dict] = {}
+
+
+class NotionOAuthCallbackRequest(BaseModel):
+    code: str
+    state: Optional[str] = None
+
+
+@router.get("/oauth/authorize")
+async def initiate_oauth(
+    workspace_id: str = Query(..., description="Workspace ID to associate the connection"),
+    agent_id: Optional[str] = Query(None, description="Optional agent ID")
+):
+    """
+    Initiate Notion OAuth flow
+    Redirects user to Notion authorization page
+    """
+    try:
+        if not NOTION_CLIENT_ID:
+            raise HTTPException(status_code=500, detail="Notion OAuth not configured. Missing NOTION_CLIENT_ID")
+
+        # Build state parameter with workspace and agent info
+        state_data = {
+            "workspace_id": workspace_id,
+            "agent_id": agent_id or ""
+        }
+        state = urllib.parse.quote(f"{workspace_id}:{agent_id or ''}")
+
+        # Build authorization URL
+        auth_url = (
+            f"https://api.notion.com/v1/oauth/authorize?"
+            f"client_id={NOTION_CLIENT_ID}&"
+            f"response_type=code&"
+            f"owner=user&"
+            f"redirect_uri={urllib.parse.quote(NOTION_REDIRECT_URI)}&"
+            f"state={state}"
+        )
+
+        return RedirectResponse(url=auth_url)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error initiating OAuth: {str(e)}")
+
+
+@router.post("/oauth/callback")
+async def handle_oauth_callback(request: NotionOAuthCallbackRequest):
+    """
+    Handle OAuth callback from Notion
+    Exchange authorization code for access token
+    """
+    try:
+        if not NOTION_CLIENT_ID or not NOTION_CLIENT_SECRET:
+            raise HTTPException(
+                status_code=500,
+                detail="Notion OAuth not configured. Missing credentials."
+            )
+
+        # Exchange code for token
+        token_result = notion_service.exchange_code_for_token(
+            code=request.code,
+            client_id=NOTION_CLIENT_ID,
+            client_secret=NOTION_CLIENT_SECRET,
+            redirect_uri=NOTION_REDIRECT_URI
+        )
+
+        if not token_result.get("success"):
+            raise HTTPException(
+                status_code=400,
+                detail=token_result.get("error", "Failed to exchange code for token")
+            )
+
+        # Parse state to get workspace and agent info
+        workspace_id = ""
+        agent_id = ""
+        if request.state:
+            parts = request.state.split(":")
+            workspace_id = parts[0] if len(parts) > 0 else ""
+            agent_id = parts[1] if len(parts) > 1 else ""
+
+        return {
+            "success": True,
+            "access_token": token_result["access_token"],
+            "workspace_id": workspace_id,
+            "agent_id": agent_id,
+            "notion_workspace_id": token_result.get("workspace_id"),
+            "notion_workspace_name": token_result.get("workspace_name"),
+            "notion_workspace_icon": token_result.get("workspace_icon"),
+            "bot_id": token_result.get("bot_id"),
+            "owner": token_result.get("owner")
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error handling OAuth callback: {str(e)}")
 
 
 @router.post("/test-connection")
@@ -106,10 +207,14 @@ async def import_notion_page(request: NotionImportRequest):
         import uuid
         item_id = f"notion-{uuid.uuid4().hex[:8]}"
         
+        # Support both agent-based and widget-based patterns
+        workspace_id = request.metadata.get("workspace_id") or request.metadata.get("business_id", "unknown")
+
         knowledge_item = {
             "id": item_id,
-            "businessId": request.metadata.get("business_id", "unknown"),
-            "widgetId": request.widget_id,
+            "workspaceId": workspace_id,
+            **({'agentId': request.agent_id} if request.agent_id else {}),
+            **({'widgetId': request.widget_id} if request.widget_id else {}),
             "title": title,
             "content": content,
             "type": "notion",
@@ -186,6 +291,7 @@ async def import_notion_database(request: NotionDatabaseImportRequest):
                     api_key=request.api_key,
                     page_id=page["id"],
                     widget_id=request.widget_id,
+                    agent_id=request.agent_id,
                     title=page["title"],
                     embedding_provider=request.embedding_provider,
                     embedding_model=request.embedding_model,

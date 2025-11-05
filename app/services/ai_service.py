@@ -1,29 +1,231 @@
 """
-AI and chat service for RAG pipeline using OpenRouter with Voyage AI Reranker
+AI and chat service for RAG pipeline using LangChain (OpenAI & Gemini) with Voyage AI Reranker
+Optimized with parallel processing and smart reranking
 """
 import os
+import asyncio
+import time
 from typing import List, Dict, Any
 from app.services.qdrant_service import qdrant_service
-from app.services.openrouter_service import openrouter_service
+from app.services.llm_service import llm_service
 from app.services.reranker_service import reranker_service
 from app.models import AIConfig, AIResponse
 
 
 class AIService:
     def __init__(self):
-        self.openrouter_service = openrouter_service
+        self.llm_service = llm_service
 
-    def get_rag_context(self, widget_id: str, business_id: str, query: str, max_docs: int = 5, embedding_provider: str = "openai", embedding_model: str = "text-embedding-3-large", reranker_enabled: bool = True, reranker_model: str = "rerank-2.5") -> List[Dict[str, Any]]:
+    def _classify_query_complexity(self, query: str) -> str:
+        """Classify query complexity for optimization routing"""
+        query_lower = query.lower().strip()
+        
+        # Simple greetings
+        greetings = [
+            "hello", "hi", "hey", "good morning", "good afternoon",
+            "good evening", "greetings", "howdy", "what's up", "wassup"
+        ]
+        
+        if any(greeting == query_lower or query_lower.startswith(greeting + " ") 
+               for greeting in greetings):
+            return "greeting"
+        
+        # Simple questions (short, common words)
+        simple_indicators = ["who", "what", "when", "where", "how much", "price", "cost"]
+        if (len(query.split()) <= 5 and 
+            any(indicator in query_lower for indicator in simple_indicators)):
+            return "simple"
+        
+        # Complex questions (long, multiple clauses, technical terms)
+        if (len(query.split()) > 10 or 
+            any(word in query_lower for word in ["explain", "describe", "analyze", "compare", "detailed"])):
+            return "complex"
+        
+        return "medium"
+
+    def _should_skip_reranking(self, search_results: List[Dict], threshold: float = 0.8) -> bool:
+        """Determine if reranking should be skipped based on top result confidence"""
+        if not search_results:
+            return True
+        
+        top_score = search_results[0].get("score", 0.0)
+        print(f"🎯 Top result score: {top_score:.4f} (threshold: {threshold})")
+        
+        if top_score >= threshold:
+            print(f"✅ Skipping reranking - top result confidence is high ({top_score:.4f} >= {threshold})")
+            return True
+        
+        return False
+
+    def _get_optimal_reranker_model(self, query_complexity: str) -> str:
+        """FORCED to always return rerank-2.5-lite regardless of complexity"""
+        return "rerank-2.5-lite"  # Always use rerank-2.5-lite
+
+    async def get_rag_context_optimized(self, agent_id: str, business_id: str, query: str, max_docs: int = 5, embedding_provider: str = "voyage", embedding_model: str = "voyage-3-large", reranker_enabled: bool = True, reranker_model: str = "rerank-2.5-lite") -> List[Dict[str, Any]]:
+        """Optimized RAG context retrieval with parallel processing and smart reranking"""
+        try:
+            # Classify query complexity for optimization decisions
+            query_complexity = self._classify_query_complexity(query)
+            print(f"🔍 Query complexity: {query_complexity}")
+            
+            if not qdrant_service.qdrant_client:
+                print("⚠️ Qdrant client not initialized - cannot retrieve RAG context")
+                return []
+            
+            # Set the embedding provider and model dynamically based on agent config
+            print(f"🔄 Setting embeddings to: {embedding_provider}/{embedding_model}")
+            qdrant_service.set_embedding_provider(embedding_provider, embedding_model)
+            
+            # Check if embeddings are ready based on provider
+            if embedding_provider == "voyage":
+                if not qdrant_service.voyage_service.client:
+                    print("⚠️ Voyage AI not initialized - cannot retrieve RAG context")
+                    return []
+            else:
+                if not qdrant_service.embeddings:
+                    print("⚠️ OpenAI embeddings not initialized - cannot retrieve RAG context")
+                    return []
+            
+            print(f"\n🔍 OPTIMIZED RAG RETRIEVAL:")
+            print(f"   Agent ID: {agent_id}")
+            print(f"   Business ID: {business_id}")
+            print(f"   Query: '{query}'")
+            print(f"   Query Complexity: {query_complexity}")
+            print(f"   Max Docs: {max_docs}")
+            print(f"   Embedding Provider: {embedding_provider}")
+            print(f"   Embedding Model: {embedding_model}")
+            
+            # PARALLEL PHASE 1: Embedding + Search Preparation
+            print(f"🚀 Phase 1: Parallel embedding + search preparation...")
+            phase1_start = time.time()
+            
+            # Get more candidates for better reranking (but optimize based on complexity)
+            if query_complexity == "simple":
+                initial_limit = max_docs * 2  # Less candidates for simple queries
+            else:
+                initial_limit = max_docs * 3  # More candidates for complex queries
+            
+            print(f"   📥 Hybrid search: retrieving {initial_limit} candidates...")
+            
+            # Execute search (this already includes embedding internally)
+            search_result = qdrant_service.search_knowledge_base(
+                query=query,
+                agent_id=agent_id,
+                limit=initial_limit
+            )
+            
+            phase1_time = time.time() - phase1_start
+            print(f"✅ Phase 1 completed in {phase1_time:.3f}s")
+            
+            if not search_result.get("success"):
+                print(f"❌ Search failed: {search_result.get('error')}")
+                return []
+            
+            initial_results = search_result.get("results", [])
+            search_type = search_result.get("search_type", "unknown")
+            
+            print(f"\n📊 SEARCH RESULTS:")
+            print(f"   Search Type: {search_type}")
+            print(f"   Candidates Found: {len(initial_results)}")
+            if search_type == "hybrid_rrf":
+                print(f"   ✅ Using: Dense (semantic) + BM42 (keywords) + RRF Fusion")
+            
+            if len(initial_results) == 0:
+                print("\n⚠️ WARNING: No documents found in knowledge base!")
+                print(f"   Make sure you have added knowledge base items for agentId: {agent_id}")
+                return []
+            
+            # PARALLEL PHASE 2: Smart Reranking Decision
+            print(f"\n🚀 Phase 2: Smart reranking decision...")
+            phase2_start = time.time()
+            
+            # Smart reranking logic
+            should_skip_rerank = self._should_skip_reranking(initial_results, threshold=0.8)
+            optimal_reranker = self._get_optimal_reranker_model(query_complexity)
+            
+            if should_skip_rerank or not reranker_enabled or len(initial_results) <= 1 or not reranker_service.client:
+                # Skip reranking - use original order
+                print(f"📋 Skipping reranking:")
+                print(f"   - High confidence: {should_skip_rerank}")
+                print(f"   - Reranker enabled: {reranker_enabled}")
+                print(f"   - Results count: {len(initial_results)}")
+                print(f"   - Reranker available: {reranker_service.client is not None}")
+                
+                context_docs = []
+                for idx, result in enumerate(initial_results[:max_docs]):
+                    print(f"\n   📄 Document {idx + 1}:")
+                    print(f"      Score: {result.get('score', 0):.4f}")
+                    print(f"      Title: {result.get('metadata', {}).get('title', 'Unknown')}")
+                    print(f"      Preview: {result.get('content', '')[:100]}...")
+                    
+                    context_docs.append({
+                        "content": result.get("content", ""),
+                        "metadata": result.get("metadata", {}),
+                        "score": result.get("score", 0.0)
+                    })
+            else:
+                # Perform smart reranking with optimal model
+                print(f"\n🔄 SMART RERANKING:")
+                print(f"   Model: {optimal_reranker} (optimized for {query_complexity} queries)")
+                print(f"   Documents: {len(initial_results)} → {max_docs}")
+                
+                # Extract document texts for reranking
+                doc_texts = [result.get("content", "") for result in initial_results]
+                
+                # Rerank documents with optimal model
+                reranked = reranker_service.rerank(
+                    query=query,
+                    documents=doc_texts,
+                    top_k=max_docs,
+                    model=optimal_reranker
+                )
+                
+                # Map reranked results back to original results with metadata
+                context_docs = []
+                for rerank_result in reranked:
+                    original_result = initial_results[rerank_result["index"]]
+                    context_docs.append({
+                        "content": original_result.get("content", ""),
+                        "metadata": original_result.get("metadata", {}),
+                        "score": original_result.get("score", 0.0),
+                        "rerank_score": rerank_result["relevance_score"]
+                    })
+                
+                print(f"\n✅ SMART RERANKING COMPLETE:")
+                print(f"   Final documents: {len(context_docs)}")
+                for idx, doc in enumerate(context_docs):
+                    print(f"\n   📄 Document {idx + 1}:")
+                    print(f"      Vector Score: {doc.get('score', 0):.4f}")
+                    print(f"      Rerank Score: {doc.get('rerank_score', 0):.4f} ⭐")
+                    print(f"      Title: {doc.get('metadata', {}).get('title', 'Unknown')}")
+                    print(f"      Preview: {doc.get('content', '')[:100]}...")
+            
+            phase2_time = time.time() - phase2_start
+            total_time = phase1_time + phase2_time
+            
+            print(f"\n⚡ OPTIMIZATION SUMMARY:")
+            print(f"   Phase 1 (Search): {phase1_time:.3f}s")
+            print(f"   Phase 2 (Rerank): {phase2_time:.3f}s")
+            print(f"   Total Time: {total_time:.3f}s")
+            print(f"   Query Complexity: {query_complexity}")
+            print(f"   Reranker Used: {optimal_reranker if not should_skip_rerank and reranker_enabled else 'None (skipped)'}")
+            
+            return context_docs
+            
+        except Exception as e:
+            print(f"\n❌ ERROR in optimized RAG context: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
         """Get relevant context from Qdrant for RAG"""
         try:
             if not qdrant_service.qdrant_client:
                 print("⚠️ Qdrant client not initialized - cannot retrieve RAG context")
                 return []
             
-            # Set the embedding provider and model dynamically based on widget config
-            if embedding_model and (embedding_model != qdrant_service.embedding_model or embedding_provider != qdrant_service.embedding_provider):
-                print(f"🔄 Switching embeddings to: {embedding_provider}/{embedding_model}")
-                qdrant_service.set_embedding_provider(embedding_provider, embedding_model)
+            # Set the embedding provider and model dynamically based on agent config
+            print(f"🔄 Setting embeddings to: {embedding_provider}/{embedding_model}")
+            qdrant_service.set_embedding_provider(embedding_provider, embedding_model)
             
             # Check if embeddings are ready based on provider
             if embedding_provider == "voyage":
@@ -36,7 +238,7 @@ class AIService:
                     return []
             
             print(f"\n🔍 RAG RETRIEVAL DEBUG:")
-            print(f"   Widget ID: {widget_id}")
+            print(f"   Agent ID: {agent_id}")
             print(f"   Business ID: {business_id}")
             print(f"   Query: '{query}'")
             print(f"   Max Docs: {max_docs}")
@@ -50,7 +252,7 @@ class AIService:
             
             search_result = qdrant_service.search_knowledge_base(
                 query=query,
-                widget_id=widget_id,
+                agent_id=agent_id,
                 limit=initial_limit
             )
             
@@ -69,7 +271,7 @@ class AIService:
             
             if len(initial_results) == 0:
                 print("\n⚠️ WARNING: No documents found in knowledge base!")
-                print(f"   Make sure you have added knowledge base items for widgetId: {widget_id}")
+                print(f"   Make sure you have added knowledge base items for agentId: {agent_id}")
                 return []
             
             # Step 2: Rerank results using Voyage AI rerank-2.5 (if enabled)
@@ -226,13 +428,13 @@ class AIService:
             print(f"❌ Error calculating confidence: {e}")
             return 0.5
 
-    def generate_ai_response(self, message: str, widget_id: str, ai_config: AIConfig, business_id: str = None, customer_handover = None) -> AIResponse:
+    async def generate_ai_response(self, message: str, agent_id: str, ai_config: AIConfig, business_id: str = None, customer_handover = None) -> AIResponse:
         """Generate AI response using OpenRouter with RAG pipeline"""
         try:
             if not ai_config.enabled:
                 return AIResponse(
                     success=False,
-                    response="AI is disabled for this widget",
+                    response="AI is disabled for this agent",
                     confidence=0.0,
                     sources=[],
                     shouldFallbackToHuman=True,
@@ -267,74 +469,8 @@ class AIService:
             
             is_simple_conversational = any(phrase in message_lower for phrase in simple_conversational)
             
-            # Check for affirmative/negative responses (also skip RAG)
-            affirmative_responses = [
-                "yes", "yeah", "yep", "sure", "ok", "okay", "please",
-                "yes please", "that would be great", "connect me"
-            ]
-            
-            negative_responses = [
-                "no", "nope", "no thanks", "not now", "maybe later",
-                "no thank you", "not really", "i'm good"
-            ]
-            
-            is_affirmative = any(response in message_lower for response in affirmative_responses) and len(message.split()) <= 5
-            is_negative = any(response in message_lower for response in negative_responses) and len(message.split()) <= 5
-            
-            # Handle affirmative responses early (user saying "yes" to handover)
-            if is_affirmative and customer_handover and customer_handover.enabled:
-                print(f"\n{'='*60}")
-                print(f"✅ AFFIRMATIVE RESPONSE - SKIPPING RAG")
-                print(f"{'='*60}")
-                print(f"   Message: '{message}'")
-                print(f"   Action: Triggering handover")
-                print(f"   💰 COST SAVING: Skipping embeddings API and Qdrant search")
-                print(f"{'='*60}\n")
-                
-                handover_confirmation = customer_handover.handoverMessage if customer_handover.handoverMessage else \
-                    "Perfect! I'm connecting you with a human agent right now. They'll be with you shortly."
-                
-                return AIResponse(
-                    success=True,
-                    response=handover_confirmation,
-                    confidence=0.95,
-                    sources=[],
-                    shouldFallbackToHuman=True,
-                    metadata={
-                        "mode": "affirmative_response",
-                        "handover_confirmed": True,
-                        "affirmative_detected": True,
-                        "rag_skipped": True,
-                        "cost_optimized": True
-                    }
-                )
-            
-            # Handle negative responses early (user saying "no" to handover)
-            if is_negative:
-                print(f"\n{'='*60}")
-                print(f"❌ NEGATIVE RESPONSE - SKIPPING RAG")
-                print(f"{'='*60}")
-                print(f"   Message: '{message}'")
-                print(f"   Action: Offering alternative help")
-                print(f"   💰 COST SAVING: Skipping embeddings API and Qdrant search")
-                print(f"{'='*60}\n")
-                
-                alternative_response = "No problem! I'm here to help. What would you like to know more about?"
-                
-                return AIResponse(
-                    success=True,
-                    response=alternative_response,
-                    confidence=0.90,
-                    sources=[],
-                    shouldFallbackToHuman=False,
-                    metadata={
-                        "mode": "negative_response",
-                        "handover_declined": True,
-                        "negative_detected": True,
-                        "rag_skipped": True,
-                        "cost_optimized": True
-                    }
-                )
+            # Affirmative/negative response detection removed to prevent false handovers
+            # Only manual handover button and AI smart handover are allowed
             
             # Skip RAG for greetings and simple conversational messages
             if is_greeting or (is_simple_conversational and len(message.split()) <= 4):
@@ -347,12 +483,12 @@ class AIService:
                 print(f"{'='*60}\n")
                 
                 # Generate direct response without RAG
-                result = self.openrouter_service.generate_response(
+                result = self.llm_service.generate_response(
                     message=message,
                     model=ai_config.model,
                     temperature=ai_config.temperature,
                     max_tokens=ai_config.maxTokens,
-                    system_prompt=self.openrouter_service.get_system_prompt_text(
+                    system_prompt=self.llm_service.get_system_prompt_text(
                         getattr(ai_config, 'systemPrompt', 'support'),
                         getattr(ai_config, 'customSystemPrompt', '')
                     )
@@ -369,7 +505,7 @@ class AIService:
                             "mode": "conversational_direct",
                             "model": ai_config.model,
                             "sources_count": 0,
-                            "widget_id": widget_id,
+                            "agent_id": agent_id,
                             "greeting_detected": is_greeting,
                             "rag_skipped": True,
                             "cost_optimized": True
@@ -377,8 +513,8 @@ class AIService:
                     )
             
             if not ai_config.ragEnabled:
-                # Direct OpenRouter response without RAG
-                result = self.openrouter_service.generate_response(
+                # Direct LLM response without RAG
+                result = self.llm_service.generate_response(
                     message=message,
                     model=ai_config.model,
                     temperature=ai_config.temperature,
@@ -408,22 +544,22 @@ class AIService:
             print(f"\n{'='*60}")
             print(f"🤖 RAG-ENABLED AI RESPONSE")
             print(f"{'='*60}")
-            print(f"   Widget ID: {widget_id}")
+            print(f"   Agent ID: {agent_id}")
             print(f"   Business ID: {business_id}")
             print(f"   Model: {ai_config.model}")
             print(f"   User Question: {message}")
             print(f"   RAG Config: maxDocs={ai_config.maxRetrievalDocs}, threshold={ai_config.confidenceThreshold}")
             
-            # Get relevant context from Qdrant (with dynamic embedding and reranker config)
-            embedding_provider = getattr(ai_config, 'embeddingProvider', 'openai')
-            embedding_model = getattr(ai_config, 'embeddingModel', 'text-embedding-3-large')
+            # FORCE Voyage AI usage - ignore config settings
+            embedding_provider = "voyage"
+            embedding_model = "voyage-3-large"
             reranker_enabled = getattr(ai_config, 'rerankerEnabled', True)
-            reranker_model = getattr(ai_config, 'rerankerModel', 'rerank-2.5')
+            reranker_model = "rerank-2.5-lite"  # FORCED: Always use rerank-2.5-lite
             
             print(f"   🎯 Reranker: {'Enabled' if reranker_enabled else 'Disabled'} ({reranker_model})")
             
-            context_docs = self.get_rag_context(
-                widget_id, 
+            context_docs = await self.get_rag_context_optimized(
+                agent_id, 
                 business_id, 
                 message, 
                 ai_config.maxRetrievalDocs, 
@@ -439,13 +575,13 @@ class AIService:
 ❌ CRITICAL ERROR: NO KNOWLEDGE BASE CONTEXT RETRIEVED!
    
    This means:
-   1. No documents found in Qdrant for widgetId: {widget_id}
+   1. No documents found in Qdrant for agentId: {agent_id}
    2. Knowledge base might be empty
    3. Similarity search returned no matches
    
    SOLUTION: 
    - Add knowledge base items via Dashboard → Knowledge Base
-   - Ensure items have widgetId: {widget_id}
+   - Ensure items have agentId: {agent_id}
    - Verify Qdrant collection has data
    
    AI will respond with fallback message.
@@ -476,7 +612,7 @@ class AIService:
             print(f"{'='*60}\n")
             
             # Generate response with context and system prompt
-            result = self.openrouter_service.generate_rag_response(
+            result = self.llm_service.generate_rag_response(
                 message=message,
                 context=context_text,
                 model=ai_config.model,
@@ -539,7 +675,7 @@ class AIService:
                             "mode": "rag_openrouter",
                             "model": ai_config.model,
                             "sources_count": len(sources),
-                            "widget_id": widget_id,
+                            "agent_id": agent_id,
                             "uncertainty_detected": True,
                             "handover_offered": True,
                             "smart_fallback": True
@@ -562,7 +698,7 @@ class AIService:
                             "mode": "rag_openrouter",
                             "model": ai_config.model,
                             "sources_count": len(sources),
-                            "widget_id": widget_id,
+                            "agent_id": agent_id,
                             "uncertainty_detected": True,
                             "handover_offered": False
                         }
@@ -595,7 +731,7 @@ class AIService:
                         "mode": "rag_openrouter",
                         "model": ai_config.model,
                         "sources_count": len(sources),
-                        "widget_id": widget_id
+                        "agent_id": agent_id
                     }
                 )
             else:
@@ -618,6 +754,228 @@ class AIService:
                 shouldFallbackToHuman=True,
                 metadata={"error": str(e)}
             )
+    async def generate_ai_response_stream(self, message: str, agent_id: str, ai_config: AIConfig, business_id: str = None, customer_handover = None):
+        """Generate AI response using streaming with timing metrics"""
+        import time
+
+        try:
+            start_time = time.time()
+
+            # Send initial status
+            yield {
+                "type": "status",
+                "message": "Starting AI processing...",
+                "timestamp": time.time() - start_time
+            }
+
+            if not ai_config.enabled:
+                yield {
+                    "type": "error",
+                    "message": "AI is disabled for this agent"
+                }
+                return
+
+            # Check for simple greetings (same logic as non-streaming)
+            greetings = [
+                "hello", "hi", "hey", "good morning", "good afternoon",
+                "good evening", "greetings", "howdy", "what's up", "wassup"
+            ]
+
+            message_lower = message.lower().strip()
+            is_greeting = any(
+                greeting == message_lower or
+                message_lower.startswith(greeting + " ") or
+                message_lower.startswith(greeting + ",") or
+                message_lower.startswith(greeting + "!")
+                for greeting in greetings
+            )
+
+            if is_greeting:
+                yield {
+                    "type": "status",
+                    "message": "Detected greeting - responding directly",
+                    "timestamp": time.time() - start_time
+                }
+
+                # Stream response directly for greetings
+                async for chunk in self.llm_service.generate_rag_response_stream(
+                    message=message,
+                    context="",
+                    model=ai_config.model,
+                    temperature=ai_config.temperature,
+                    max_tokens=ai_config.maxTokens,
+                    system_prompt_type=getattr(ai_config, 'systemPrompt', 'support'),
+                    custom_system_prompt=getattr(ai_config, 'customSystemPrompt', '')
+                ):
+                    if "content" in chunk:
+                        yield {
+                            "type": "content",
+                            "content": chunk["content"],
+                            "timestamp": time.time() - start_time
+                        }
+                    elif "error" in chunk:
+                        yield {
+                            "type": "error",
+                            "message": chunk["error"]
+                        }
+
+                # Send completion
+                yield {
+                    "type": "complete",
+                    "confidence": 0.95,
+                    "sources": [],
+                    "metrics": {
+                        "total_time": time.time() - start_time,
+                        "retrieval_time": 0,
+                        "llm_time": time.time() - start_time
+                    }
+                }
+                return
+
+            # RAG-enabled response with timing
+            if ai_config.ragEnabled:
+                # Step 1: Retrieval
+                retrieval_start = time.time()
+                yield {
+                    "type": "status",
+                    "message": "Searching knowledge base...",
+                    "timestamp": time.time() - start_time
+                }
+
+                # FORCE Voyage AI usage - ignore config settings
+                embedding_provider = "voyage"
+                embedding_model = "voyage-3-large"
+                reranker_enabled = getattr(ai_config, 'rerankerEnabled', True)
+                reranker_model = "rerank-2.5-lite"  # FORCED: Always use rerank-2.5-lite
+
+                context_docs = await self.get_rag_context_optimized(
+                    agent_id,
+                    business_id,
+                    message,
+                    ai_config.maxRetrievalDocs,
+                    embedding_provider,
+                    embedding_model,
+                    reranker_enabled,
+                    reranker_model
+                )
+
+                retrieval_time = time.time() - retrieval_start
+
+                yield {
+                    "type": "status",
+                    "message": f"Found {len(context_docs)} relevant documents",
+                    "timestamp": time.time() - start_time,
+                    "metrics": {"retrieval_time": retrieval_time}
+                }
+
+                # Format context
+                context_text = ""
+                sources = []
+                for doc in context_docs:
+                    context_text += f"{doc['content']}\n\n"
+                    sources.append({
+                        "content": doc["content"][:200] + "..." if len(doc["content"]) > 200 else doc["content"],
+                        "metadata": doc["metadata"],
+                        "title": doc["metadata"].get("title", "Unknown"),
+                        "type": doc["metadata"].get("type", "text"),
+                        "score": doc["score"]
+                    })
+
+                # Step 2: LLM Generation
+                llm_start = time.time()
+                yield {
+                    "type": "status",
+                    "message": "Generating response...",
+                    "timestamp": time.time() - start_time
+                }
+
+                # Stream the LLM response
+                async for chunk in self.llm_service.generate_rag_response_stream(
+                    message=message,
+                    context=context_text,
+                    model=ai_config.model,
+                    temperature=ai_config.temperature,
+                    max_tokens=ai_config.maxTokens,
+                    system_prompt_type=getattr(ai_config, 'systemPrompt', 'support'),
+                    custom_system_prompt=getattr(ai_config, 'customSystemPrompt', '')
+                ):
+                    if "content" in chunk:
+                        yield {
+                            "type": "content",
+                            "content": chunk["content"],
+                            "timestamp": time.time() - start_time
+                        }
+                    elif "error" in chunk:
+                        yield {
+                            "type": "error",
+                            "message": chunk["error"]
+                        }
+
+                llm_time = time.time() - llm_start
+                total_time = time.time() - start_time
+
+                # Send completion with metrics
+                yield {
+                    "type": "complete",
+                    "confidence": 0.85,
+                    "sources": sources,
+                    "metrics": {
+                        "total_time": total_time,
+                        "retrieval_time": retrieval_time,
+                        "llm_time": llm_time,
+                        "sources_count": len(sources)
+                    }
+                }
+            else:
+                # Direct response without RAG
+                llm_start = time.time()
+                yield {
+                    "type": "status",
+                    "message": "Generating response...",
+                    "timestamp": time.time() - start_time
+                }
+
+                async for chunk in self.llm_service.generate_rag_response_stream(
+                    message=message,
+                    context="",
+                    model=ai_config.model,
+                    temperature=ai_config.temperature,
+                    max_tokens=ai_config.maxTokens,
+                    system_prompt_type=getattr(ai_config, 'systemPrompt', 'support'),
+                    custom_system_prompt=getattr(ai_config, 'customSystemPrompt', '')
+                ):
+                    if "content" in chunk:
+                        yield {
+                            "type": "content",
+                            "content": chunk["content"],
+                            "timestamp": time.time() - start_time
+                        }
+                    elif "error" in chunk:
+                        yield {
+                            "type": "error",
+                            "message": chunk["error"]
+                        }
+
+                llm_time = time.time() - llm_start
+                total_time = time.time() - start_time
+
+                yield {
+                    "type": "complete",
+                    "confidence": 0.7,
+                    "sources": [],
+                    "metrics": {
+                        "total_time": total_time,
+                        "retrieval_time": 0,
+                        "llm_time": llm_time
+                    }
+                }
+
+        except Exception as e:
+            print(f"Error in streaming response: {e}")
+            yield {
+                "type": "error",
+                "message": str(e)
+            }
 
 
 # Global service instance

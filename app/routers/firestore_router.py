@@ -1,15 +1,22 @@
 """
 Firestore router for retrieving scraped website data
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Body
 from typing import Optional
 import logging
+from pydantic import BaseModel
 
 from app.services.firestore_service import firestore_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Request models
+class ConversationReplyRequest(BaseModel):
+    message: str
+    agentId: str
+    senderType: str = "agent_owner"
 
 @router.get("/scraped-websites")
 async def get_scraped_websites(
@@ -117,6 +124,35 @@ async def get_conversation_messages(
     except Exception as e:
         logger.error(f"Error retrieving conversation: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@router.post("/conversations/{conversation_id}/reply")
+async def reply_to_conversation(
+    conversation_id: str,
+    request: ConversationReplyRequest
+):
+    """Send a reply to a conversation (for agent owners)"""
+    try:
+        logger.info(f"📨 Agent reply to conversation {conversation_id}: {request.message[:50]}...")
+        
+        # Here you can add additional logic like:
+        # 1. Verify the agent owner has permission to reply to this conversation
+        # 2. Store the message in Firestore (this is already handled by the frontend)
+        # 3. Send notifications to the customer
+        # 4. Trigger any webhooks or integrations
+        
+        # For now, we'll just log the reply and return success
+        # The actual message storage is handled by the frontend Firestore integration
+        
+        return {
+            "success": True,
+            "message": "Reply sent successfully",
+            "conversationId": conversation_id,
+            "agentId": request.agentId
+        }
+        
+    except Exception as e:
+        logger.error(f"Error sending conversation reply: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to send reply: {str(e)}")
 
 @router.delete("/delete-all")
 async def delete_all_firestore_data(request: dict):

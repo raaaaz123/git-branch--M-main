@@ -102,9 +102,10 @@ class QdrantService:
         self.qdrant_client = None
         self.embeddings = None
         self.base_collection_name = QDRANT_COLLECTION_NAME
-        self.collection_name = QDRANT_COLLECTION_NAME  # Active collection
-        self.embedding_provider = "openai"  # Default: openai or voyage
-        self.embedding_model = "text-embedding-3-large"  # Default OpenAI model
+        # ALWAYS use Voyage AI collection and voyage-3-large model
+        self.collection_name = f"{QDRANT_COLLECTION_NAME}-voyage"  # Force Voyage collection
+        self.embedding_provider = "voyage"  # Always use Voyage AI
+        self.embedding_model = "voyage-3-large"  # Always use voyage-3-large (1024 dims)
         self.voyage_service = voyage_service
         self._initialize()
 
@@ -116,6 +117,7 @@ class QdrantService:
             self.qdrant_client = QdrantClient(
                 url=QDRANT_URL,
                 api_key=QDRANT_API_KEY,
+                timeout=120  # 2 minutes timeout for large uploads
             )
             
             # Test connection
@@ -151,6 +153,7 @@ class QdrantService:
                 self.qdrant_client = QdrantClient(
                     url=QDRANT_URL,
                     api_key=QDRANT_API_KEY,
+                    timeout=120  # 2 minutes timeout for large uploads
                 )
                 print("✅ Qdrant client reconnected")
             except Exception as e:
@@ -270,7 +273,35 @@ class QdrantService:
                     print(f"✅ Payload index for 'itemId' already exists")
                 else:
                     print(f"⚠️ Could not create itemId index: {idx_error}")
-            
+
+            try:
+                # Create index for agentId (keyword type for agent-scoped queries)
+                self.qdrant_client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="agentId",
+                    field_schema="keyword"
+                )
+                print(f"✅ Created payload index for 'agentId'")
+            except Exception as idx_error:
+                if "already exists" in str(idx_error).lower():
+                    print(f"✅ Payload index for 'agentId' already exists")
+                else:
+                    print(f"⚠️ Could not create agentId index: {idx_error}")
+
+            try:
+                # Create index for workspaceId (keyword type for workspace-scoped queries)
+                self.qdrant_client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="workspaceId",
+                    field_schema="keyword"
+                )
+                print(f"✅ Created payload index for 'workspaceId'")
+            except Exception as idx_error:
+                if "already exists" in str(idx_error).lower():
+                    print(f"✅ Payload index for 'workspaceId' already exists")
+                else:
+                    print(f"⚠️ Could not create workspaceId index: {idx_error}")
+
         except Exception as e:
             print(f"❌ Error ensuring collection exists: {e}")
             raise
@@ -359,7 +390,35 @@ class QdrantService:
                     print(f"✅ Payload index for 'itemId' already exists")
                 else:
                     print(f"⚠️ Could not create itemId index: {e}")
-                    
+
+            # Create index for agentId
+            try:
+                self.qdrant_client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="agentId",
+                    field_schema="keyword"
+                )
+                print(f"✅ Created payload index for 'agentId'")
+            except Exception as e:
+                if "already exists" in str(e).lower():
+                    print(f"✅ Payload index for 'agentId' already exists")
+                else:
+                    print(f"⚠️ Could not create agentId index: {e}")
+
+            # Create index for workspaceId
+            try:
+                self.qdrant_client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="workspaceId",
+                    field_schema="keyword"
+                )
+                print(f"✅ Created payload index for 'workspaceId'")
+            except Exception as e:
+                if "already exists" in str(e).lower():
+                    print(f"✅ Payload index for 'workspaceId' already exists")
+                else:
+                    print(f"⚠️ Could not create workspaceId index: {e}")
+
         except Exception as e:
             print(f"❌ Error creating payload indexes: {e}")
             raise
@@ -386,16 +445,18 @@ class QdrantService:
             return self.base_collection_name  # Keep original name for OpenAI
     
     def set_embedding_provider(self, provider: str, model: str):
-        """Set the embedding provider (openai or voyage) and model, initializing on-demand"""
+        """Set the embedding provider - FORCED to always use Voyage AI voyage-3-large"""
         try:
+            # FORCE Voyage AI usage - ignore any other provider requests
+            provider = "voyage"
+            model = "voyage-3-large"
+            
             # Check if we need to re-initialize
             needs_init = False
             
             if self.embedding_provider != provider or self.embedding_model != model:
                 needs_init = True
-            elif provider == "openai" and not self.embeddings:
-                needs_init = True
-            elif provider == "voyage" and not self.voyage_service.client:
+            elif not self.voyage_service.client:
                 needs_init = True
             
             if not needs_init:
@@ -406,57 +467,30 @@ class QdrantService:
             self.embedding_provider = provider
             self.embedding_model = model
             
-            # Update collection name based on provider
-            self.collection_name = self._get_collection_name(provider)
+            # ALWAYS use Voyage collection
+            self.collection_name = f"{self.base_collection_name}-voyage"
             print(f"   📦 Collection: {self.collection_name}")
             
-            if provider == "voyage":
-                # Use Voyage AI
-                if not self.voyage_service.client:
-                    raise Exception("Voyage AI client not initialized - check VOYAGE_API_KEY in .env")
-                
-                print(f"✅ Switched to Voyage AI embeddings (model: {model})")
-                print(f"   🚢 Voyage AI ready for use")
-                print(f"   📊 Dimension: {self.voyage_service.get_embedding_dimension(model)}")
-                
-                # Ensure collection exists with correct dimensions
-                self._ensure_collection_exists(self.voyage_service.get_embedding_dimension(model))
-                    
-            elif provider == "openai":
-                # Initialize OpenAI embeddings
-                if not OPENAI_API_KEY or OPENAI_API_KEY == "your-openai-api-key-here":
-                    raise Exception("OpenAI API key not configured - check OPENAI_API_KEY in .env")
-                
-                # Always initialize/re-initialize to ensure it's ready
-                print(f"🔄 Initializing OpenAI embeddings (model: {model})...")
-                self.embeddings = OpenAIEmbeddings(
-                    openai_api_key=OPENAI_API_KEY,
-                    model=model
-                )
-                # Get embedding dimension
-                test_embedding = self.embeddings.embed_query("test")
-                embedding_dim = len(test_embedding)
-                print(f"✅ OpenAI embeddings initialized")
-                print(f"   🤖 Model: {model}")
-                print(f"   📊 Dimension: {embedding_dim}")
-                
-                # Ensure collection exists with correct dimensions
-                self._ensure_collection_exists(embedding_dim)
-            else:
-                raise Exception(f"Unknown embedding provider: {provider}")
+            # Use Voyage AI (no other options allowed)
+            if not self.voyage_service.client:
+                raise Exception("Voyage AI client not initialized - check VOYAGE_API_KEY in .env")
+            
+            print(f"✅ Switched to Voyage AI embeddings (model: {model})")
+            print(f"   🚢 Voyage AI ready for use")
+            print(f"   📊 Dimension: {self.voyage_service.get_embedding_dimension(model)}")
+            
+            # Ensure collection exists with correct dimensions (1024 for voyage-3-large)
+            self._ensure_collection_exists(1024)
                 
         except Exception as e:
             print(f"❌ Error setting embedding provider: {e}")
             raise
     
     def set_embedding_model(self, model: str):
-        """Set the embedding model to use (legacy method for backward compatibility)"""
+        """Set the embedding model - FORCED to always use voyage-3-large"""
         try:
-            # Determine provider from model name
-            if model.startswith("voyage-"):
-                self.set_embedding_provider("voyage", model)
-            else:
-                self.set_embedding_provider("openai", model)
+            # FORCE voyage-3-large usage - ignore any other model requests
+            self.set_embedding_provider("voyage", "voyage-3-large")
         except Exception as e:
             print(f"Error setting embedding model: {e}")
             raise
@@ -541,8 +575,7 @@ class QdrantService:
                 point_id = str(uuid.uuid4())
                 
                 payload = {
-                    "businessId": item["businessId"],
-                    "widgetId": item["widgetId"],
+                    "workspaceId": item.get("workspaceId") or item.get("businessId", "unknown"),
                     "itemId": item["id"],
                     "title": item["title"],
                     "type": item["type"],
@@ -550,6 +583,18 @@ class QdrantService:
                     "chunkIndex": i,
                     "totalChunks": len(texts),
                 }
+                
+                # Add widgetId or agentId if available
+                if item.get("widgetId"):
+                    payload["widgetId"] = item["widgetId"]
+                if item.get("agentId"):
+                    payload["agentId"] = item["agentId"]
+                
+                # Add workspaceId (preferred) or businessId for backward compatibility
+                if item.get("workspaceId"):
+                    payload["workspaceId"] = item["workspaceId"]
+                elif item.get("businessId"):
+                    payload["businessId"] = item["businessId"]
                 
                 # Add file metadata if available
                 if item.get("fileName"):
@@ -569,31 +614,61 @@ class QdrantService:
                     payload=payload
                 ))
             
-            # Upload points to Qdrant
-            self.qdrant_client.upsert(
-                collection_name=self.collection_name,
-                points=points
-            )
+            # Upload points to Qdrant in batches to avoid timeout
+            batch_size = 10  # Process 10 points at a time
+            total_uploaded = 0
+            
+            for i in range(0, len(points), batch_size):
+                batch = points[i:i + batch_size]
+                print(f"   📤 Uploading batch {i//batch_size + 1}/{(len(points) + batch_size - 1)//batch_size} ({len(batch)} points)...")
+                
+                try:
+                    self.qdrant_client.upsert(
+                        collection_name=self.collection_name,
+                        points=batch,
+                        wait=True  # Wait for the operation to complete
+                    )
+                    total_uploaded += len(batch)
+                    print(f"   ✅ Batch uploaded successfully ({total_uploaded}/{len(points)} total)")
+                except Exception as batch_error:
+                    print(f"   ⚠️ Batch upload failed, retrying: {batch_error}")
+                    # Retry once with smaller batch
+                    for point in batch:
+                        try:
+                            self.qdrant_client.upsert(
+                                collection_name=self.collection_name,
+                                points=[point],
+                                wait=True
+                            )
+                            total_uploaded += 1
+                        except Exception as point_error:
+                            print(f"   ❌ Failed to upload point {point.id}: {point_error}")
+            
+            print(f"   🎉 Successfully uploaded {total_uploaded}/{len(points)} points to Qdrant")
             
             return {
                 "success": True,
-                "message": f"Successfully stored {len(texts)} chunks for item {item['id']}",
-                "chunks_created": len(texts),
-                "point_ids": [point.id for point in points]
+                "message": f"Successfully stored {total_uploaded} chunks for item {item['id']}",
+                "chunks_created": total_uploaded,
+                "point_ids": [point.id for point in points[:total_uploaded]]
             }
             
         except Exception as e:
             print(f"Error storing knowledge item: {e}")
             raise Exception(str(e))
 
-    def search_knowledge_base(self, query: str, widget_id: str, limit: int = 5, score_threshold: float = 0.05) -> Dict[str, Any]:
+    def search_knowledge_base(self, query: str, agent_id: str, limit: int = 5, score_threshold: float = 0.05) -> Dict[str, Any]:
         """
         HYBRID SEARCH using Dense + BM42 Sparse with RRF Fusion
         Combines semantic understanding with exact keyword matching
+        Uses agentId for filtering
         """
         try:
             if not self.qdrant_client:
                 raise Exception("Qdrant client not initialized")
+            
+            if not agent_id:
+                raise Exception("agent_id must be provided")
             
             # Check if embeddings are available based on provider
             if self.embedding_provider == "voyage":
@@ -612,7 +687,7 @@ class QdrantService:
             print(f"   Original query: '{query}'")
             if preprocessed_query != query:
                 print(f"   Preprocessed: '{preprocessed_query}'")
-            print(f"   Widget ID: {widget_id}")
+            print(f"   Agent ID: {agent_id}")
             print(f"   Requested limit: {limit}")
             print(f"   Embedding: {self.embedding_provider}/{self.embedding_model}")
             
@@ -628,12 +703,12 @@ class QdrantService:
             query_sparse_vector = generate_sparse_vector(preprocessed_query)
             print(f"   🔍 Sparse vector: BM42 ({len(query_sparse_vector.indices)} tokens)")
             
-            # Create filter for widgetId
-            widget_filter = Filter(
+            # Create filter for agentId
+            agent_filter = Filter(
                 must=[
                     FieldCondition(
-                        key="widgetId",
-                        match=MatchValue(value=widget_id)
+                        key="agentId",
+                        match=MatchValue(value=agent_id)
                     )
                 ]
             )
@@ -650,14 +725,14 @@ class QdrantService:
                         query=query_dense_vector,
                         using="dense",
                         limit=limit * 3,  # Get 3x more for better fusion
-                        filter=widget_filter
+                        filter=agent_filter
                     ),
                     # Prefetch from sparse vector search (keywords - BM42)
                     Prefetch(
                         query=query_sparse_vector,
                         using="sparse",
                         limit=limit * 3,  # Get 3x more for better fusion
-                        filter=widget_filter
+                        filter=agent_filter
                     )
                 ],
                 query=FusionQuery(
@@ -711,12 +786,12 @@ class QdrantService:
             
             # Fallback to dense-only search if hybrid fails
             try:
-                return self._fallback_dense_search(query, widget_id, limit, score_threshold)
+                return self._fallback_dense_search(query, agent_id, limit, score_threshold)
             except Exception as fallback_error:
                 print(f"❌ Fallback search also failed: {fallback_error}")
                 raise Exception(str(e))
     
-    def _fallback_dense_search(self, query: str, widget_id: str, limit: int, score_threshold: float) -> Dict[str, Any]:
+    def _fallback_dense_search(self, query: str, agent_id: str, limit: int, score_threshold: float) -> Dict[str, Any]:
         """
         Fallback to dense-only search for backward compatibility
         Used if hybrid search fails (e.g., old collection format)
@@ -739,8 +814,8 @@ class QdrantService:
             query_filter=Filter(
                 must=[
                     FieldCondition(
-                        key="widgetId",
-                        match=MatchValue(value=widget_id)
+                        key="agentId",
+                        match=MatchValue(value=agent_id)
                     )
                 ]
             ),

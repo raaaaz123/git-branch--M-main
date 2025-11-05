@@ -448,5 +448,45 @@ class FirestoreService:
                 "error": str(e)
             }
 
+    async def get_document(self, doc_path: str) -> Optional[Dict[str, Any]]:
+        """Get a document from Firestore by path"""
+        try:
+            if not self.db:
+                logger.error("Firestore not available")
+                return None
+            
+            doc_ref = self.db.document(doc_path)
+            doc = doc_ref.get()
+            
+            if doc.exists:
+                return doc.to_dict()
+            else:
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Error getting document from Firestore: {str(e)}")
+            return None
+
+    async def set_document(self, doc_path: str, data: Dict[str, Any]) -> bool:
+        """Set a document in Firestore by path"""
+        try:
+            if not self.db:
+                logger.error("Firestore not available")
+                return False
+            
+            doc_ref = self.db.document(doc_path)
+            doc_ref.set(data)
+            
+            logger.info(f"✅ Document set successfully: {doc_path}")
+            return True
+                
+        except Exception as e:
+            logger.error(f"❌ Error setting document in Firestore: {str(e)}")
+            return False
+
+    def get_server_timestamp(self):
+        """Get Firestore server timestamp"""
+        return firestore.SERVER_TIMESTAMP
+
 # Global service instance
 firestore_service = FirestoreService()

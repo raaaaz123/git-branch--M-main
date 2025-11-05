@@ -154,43 +154,58 @@ class OpenRouterService:
             base_system_prompt = self.get_system_prompt_text(system_prompt_type, custom_system_prompt)
             
             # Create CONVERSATIONAL and RELEVANCE-AWARE system prompt for RAG
+            # CRITICAL: RAG instructions must come FIRST to ensure knowledge base is prioritized
             if context and context.strip():
-                system_prompt = f"""{base_system_prompt}
+                system_prompt = f"""━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚨🚨🚨 CRITICAL: KNOWLEDGE BASE PRIORITY 🚨🚨🚨
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-You are a helpful, friendly AI assistant. Be conversational and natural in your responses.
+YOU HAVE ACCESS TO A KNOWLEDGE BASE WITH RELEVANT INFORMATION.
+YOU MUST USE THIS INFORMATION TO ANSWER USER QUESTIONS.
 
 ===== KNOWLEDGE BASE (Available for Reference) =====
 {context}
 ===== END OF KNOWLEDGE BASE =====
 
-USER MESSAGE: "{message}"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 MANDATORY INSTRUCTIONS - READ FIRST 📋
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-INSTRUCTIONS:
-1. If this is a GREETING (hello, hi, hey, etc.) or CASUAL CONVERSATION (how are you, thanks, etc.):
+1. **ALWAYS CHECK THE KNOWLEDGE BASE FIRST** for any question requiring information:
+   - Search through the KNOWLEDGE BASE above
+   - If you find ANY information (even partial matches):
+     → USE IT IMMEDIATELY to answer the question
+     → Be confident and provide the specific details from the KB
+     → Do NOT say "I'm not sure" if the information exists in the KB
+   
+2. Example: If user asks "give me emailid of VISHNU GOPAL V P":
+   - Search the KNOWLEDGE BASE for "VISHNU GOPAL V P"
+   - Find the email address in the KB
+   - Answer directly: "The email address is [email from KB]"
+   - DO NOT say "I'm not sure" if the email exists in the KB
+
+3. **ONLY** say "I'm not sure about that from my current knowledge base" if:
+   - You have searched the entire KNOWLEDGE BASE
+   - You found ZERO relevant information
+   - The question is completely unrelated to what's in the KB
+
+4. For GREETINGS or CASUAL CONVERSATION:
    - Respond naturally and warmly
    - Be friendly and welcoming
-   - DO NOT mention the knowledge base or offer handover
+   - DO NOT mention the knowledge base
 
-2. If this is a SUBSTANTIVE QUESTION that requires specific information:
-   - Look through the KNOWLEDGE BASE for relevant information
-   - IF you find ANYTHING related (even partially):
-     * Use it confidently to answer
-     * Be helpful and provide the information
-     * Don't overthink - if it's in the KB, share it!
-   - ONLY if you find NOTHING related at all:
-     * Say "I'm not sure about that from my current knowledge base."
+5. Be LIBERAL and CONFIDENT with the knowledge base:
+   - If the KB has related information, use it!
+   - Don't overthink - if it's in the KB, share it!
+   - Be specific and provide exact details from the KB
 
-3. Be LIBERAL with the knowledge base:
-   - If question is about hours/time and KB has working hours → answer confidently!
-   - If question is about pricing and KB has pricing info → share it!
-   - Don't be overly cautious - use what you have!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-4. Be HUMAN-LIKE:
-   - Use natural language
-   - Be conversational and friendly
-   - Don't be robotic or overly formal
+USER MESSAGE: "{message}"
 
-Answer naturally and appropriately:"""
+Now answer the user's question using the KNOWLEDGE BASE above. If the information exists in the KB, provide it directly. Only say you're unsure if you've searched the entire KB and found nothing relevant.
+
+{base_system_prompt}"""
             else:
                 # No context available - be conversational
                 system_prompt = f"""{base_system_prompt}
@@ -318,12 +333,129 @@ Be natural, friendly, and helpful:"""
                 "content": None
             }
 
+    def generate_rag_response_stream(
+        self,
+        message: str,
+        context: str,
+        model: str = "openai/gpt-4o-mini",
+        temperature: float = 0.7,
+        max_tokens: int = 500,
+        system_prompt_type: str = "support",
+        custom_system_prompt: str = ""
+    ):
+        """Generate AI response with RAG context using streaming"""
+        try:
+            if self.client is None:
+                yield {"error": "OpenRouter API key not configured"}
+                return
+
+            # Get system prompt (same as non-streaming version)
+            base_system_prompt = self.get_system_prompt_text(system_prompt_type, custom_system_prompt)
+
+            if context and context.strip():
+                system_prompt = f"""━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚨🚨🚨 CRITICAL: KNOWLEDGE BASE PRIORITY 🚨🚨🚨
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+YOU HAVE ACCESS TO A KNOWLEDGE BASE WITH RELEVANT INFORMATION.
+YOU MUST USE THIS INFORMATION TO ANSWER USER QUESTIONS.
+
+===== KNOWLEDGE BASE (Available for Reference) =====
+{context}
+===== END OF KNOWLEDGE BASE =====
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 MANDATORY INSTRUCTIONS - READ FIRST 📋
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. **ALWAYS CHECK THE KNOWLEDGE BASE FIRST** for any question requiring information:
+   - Search through the KNOWLEDGE BASE above
+   - If you find ANY information (even partial matches):
+     → USE IT IMMEDIATELY to answer the question
+     → Be confident and provide the specific details from the KB
+     → Do NOT say "I'm not sure" if the information exists in the KB
+   
+2. Example: If user asks "give me emailid of VISHNU GOPAL V P":
+   - Search the KNOWLEDGE BASE for "VISHNU GOPAL V P"
+   - Find the email address in the KB
+   - Answer directly: "The email address is [email from KB]"
+   - DO NOT say "I'm not sure" if the email exists in the KB
+
+3. **ONLY** say "I'm not sure about that from my current knowledge base" if:
+   - You have searched the entire KNOWLEDGE BASE
+   - You found ZERO relevant information
+   - The question is completely unrelated to what's in the KB
+
+4. For GREETINGS or CASUAL CONVERSATION:
+   - Respond naturally and warmly
+   - Be friendly and welcoming
+   - DO NOT mention the knowledge base
+
+5. Be LIBERAL and CONFIDENT with the knowledge base:
+   - If the KB has related information, use it!
+   - Don't overthink - if it's in the KB, share it!
+   - Be specific and provide exact details from the KB
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+USER MESSAGE: "{message}"
+
+Now answer the user's question using the KNOWLEDGE BASE above. If the information exists in the KB, provide it directly. Only say you're unsure if you've searched the entire KB and found nothing relevant.
+
+{base_system_prompt}"""
+            else:
+                system_prompt = f"""{base_system_prompt}
+
+You are a helpful AI assistant, but you currently don't have access to the knowledge base.
+
+USER MESSAGE: "{message}"
+
+INSTRUCTIONS:
+1. If this is a GREETING or CASUAL CONVERSATION:
+   - Respond warmly and naturally
+   - Be friendly and welcoming
+   - Ask how you can help
+
+2. If this is a SPECIFIC QUESTION requiring knowledge:
+   - Politely say: "I don't have access to my knowledge base at the moment. Let me connect you with a team member who can help you with that."
+
+Be natural, friendly, and helpful:"""
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "Please provide your answer now."}
+            ]
+
+            print(f"🚀 Starting streaming response with model: {model}")
+
+            # Create streaming completion
+            stream = self.client.chat.completions.create(
+                extra_headers={
+                    "HTTP-Referer": self.site_url,
+                    "X-Title": self.site_name,
+                },
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=True
+            )
+
+            # Stream chunks
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield {"content": chunk.choices[0].delta.content}
+
+        except Exception as e:
+            print(f"❌ Streaming error: {e}")
+            yield {"error": str(e)}
+
     def test_connection(self) -> Dict[str, Any]:
         """Test OpenRouter API connection"""
         try:
             test_message = "Hello, this is a test message. Please respond with 'Connection successful'."
             result = self.generate_response(test_message)
-            
+
             if result["success"]:
                 return {
                     "status": "success",

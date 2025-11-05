@@ -17,14 +17,15 @@ router = APIRouter()
 
 
 class FAQRequest(BaseModel):
-    widget_id: str
+    agent_id: Optional[str] = None
+    widget_id: Optional[str] = None
     title: str
     question: str
     answer: str
     type: str = "faq"
     metadata: Optional[Dict[str, Any]] = {}
-    embedding_provider: str = "openai"
-    embedding_model: str = "text-embedding-3-large"
+    embedding_provider: str = "voyage"
+    embedding_model: str = "voyage-3"
 
     class Config:
         extra = "allow"
@@ -36,25 +37,27 @@ async def store_faq(request: FAQRequest):
     Store FAQ (Question & Answer) to Pinecone and Firestore
     """
     try:
-        business_id = request.metadata.get('business_id', '')
+        workspace_id = request.metadata.get('workspace_id', '') or request.metadata.get('business_id', '')
         tags = request.metadata.get('tags', [])
         
         logger.info("\n" + "="*100)
         logger.info(f"💬 STORING FAQ")
         logger.info(f"   Question: {request.question[:60]}...")
-        logger.info(f"   Business ID: {business_id}")
-        logger.info(f"   Widget ID: {request.widget_id}")
+        logger.info(f"   Workspace ID: {workspace_id}")
+        logger.info(f"   Agent ID: {request.agent_id}")
+        if request.widget_id:
+            logger.info(f"   Widget ID: {request.widget_id}")
         logger.info("="*100 + "\n")
         
         # Format FAQ content for better searchability
         faq_content = f"Question: {request.question}\n\nAnswer: {request.answer}"
         
-        # Create rich metadata for Pinecone
+        # Create rich metadata for Qdrant
         faq_metadata = {
-            'widget_id': request.widget_id,
-            'widgetId': request.widget_id,
-            'businessId': business_id,
-            'business_id': business_id,
+            **({'agent_id': request.agent_id, 'agentId': request.agent_id} if request.agent_id else {}),
+            **({'widget_id': request.widget_id, 'widgetId': request.widget_id} if request.widget_id else {}),
+            'workspaceId': workspace_id,
+            'workspace_id': workspace_id,
             'title': request.title,
             'question': request.question,
             'answer': request.answer,
@@ -67,7 +70,8 @@ async def store_faq(request: FAQRequest):
         }
         
         # Generate unique ID
-        faq_id = f"faq_{request.widget_id}_{uuid.uuid4().hex[:12]}_{int(time.time())}"
+        base_owner = request.agent_id or request.widget_id or 'unknown'
+        faq_id = f"faq_{base_owner}_{uuid.uuid4().hex[:12]}_{int(time.time())}"
         
         logger.info(f"📝 Storing to Qdrant with embeddings: {request.embedding_provider}/{request.embedding_model}")
         logger.info(f"   FAQ ID: {faq_id}")
@@ -79,8 +83,9 @@ async def store_faq(request: FAQRequest):
         # Store in Qdrant with specified provider and model
         result = qdrant_service.store_knowledge_item({
             'id': faq_id,
-            'businessId': business_id,
-            'widgetId': request.widget_id,
+            'workspaceId': workspace_id,
+            **({'agentId': request.agent_id} if request.agent_id else {}),
+            **({'widgetId': request.widget_id} if request.widget_id else {}),
             'title': request.title,
             'content': faq_content,
             'type': 'faq',
@@ -102,8 +107,9 @@ async def store_faq(request: FAQRequest):
         firestore_data = {
             'faq_id': faq_id,
             'vector_id': result.get('vector_id', faq_id),
-            'widget_id': request.widget_id,
-            'business_id': business_id,
+            **({'agent_id': request.agent_id} if request.agent_id else {}),
+            **({'widget_id': request.widget_id} if request.widget_id else {}),
+            'workspace_id': workspace_id,
             'title': request.title,
             'question': request.question,
             'answer': request.answer,

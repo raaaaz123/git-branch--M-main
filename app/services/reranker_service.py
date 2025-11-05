@@ -10,7 +10,7 @@ class RerankerService:
     def __init__(self):
         self.api_key = VOYAGE_API_KEY
         self.client = None
-        self.model = "rerank-2.5"  # Voyage AI's latest reranker
+        self.model = "rerank-2.5-lite"  # FORCED: Always use rerank-2.5-lite
         self._initialize()
     
     def _initialize(self):
@@ -32,21 +32,24 @@ class RerankerService:
         query: str, 
         documents: List[str], 
         top_k: int = 3,
-        model: str = "rerank-2.5"
+        model: str = "rerank-2.5-lite"  # FORCED: Always use rerank-2.5-lite
     ) -> List[Dict[str, Any]]:
         """
-        Rerank documents based on relevance to query
+        Rerank documents based on relevance to query - FORCED to use rerank-2.5-lite
         
         Args:
             query: The search query
             documents: List of document texts to rerank
             top_k: Number of top results to return
-            model: Reranker model to use (default: rerank-2.5)
+            model: Ignored - always uses rerank-2.5-lite
         
         Returns:
             List of dicts with: {index, relevance_score, document}
         """
         try:
+            # FORCE rerank-2.5-lite usage - ignore model parameter
+            model = "rerank-2.5-lite"
+            
             if not self.client:
                 print("⚠️ Reranker not available - returning original order")
                 # Return documents in original order if reranker unavailable

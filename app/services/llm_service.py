@@ -15,45 +15,52 @@ class LLMService:
     # Available models configuration
     AVAILABLE_MODELS = {
         # OpenAI Models
-        "gpt-4o-mini": {
+        "gpt-5-mini": {
             "provider": "openai",
-            "name": "GPT-4o Mini",
+            "name": "GPT-5 Mini",
+            "description": "Latest OpenAI model - Mini",
+            "max_tokens": 16385,
+            "supports_streaming": True
+        },
+        "gpt-5-nano": {
+            "provider": "openai",
+            "name": "GPT-5 Nano",
+            "description": "Latest OpenAI model - Nano",
+            "max_tokens": 16385,
+            "supports_streaming": True
+        },
+        "gpt-4.1-mini": {
+            "provider": "openai",
+            "name": "GPT-4.1 Mini",
             "description": "Fast and affordable",
             "max_tokens": 16385,
             "supports_streaming": True
         },
-        "gpt-4o": {
+        "gpt-4.1-nano": {
             "provider": "openai",
-            "name": "GPT-4o",
-            "description": "Most capable OpenAI model",
-            "max_tokens": 128000,
-            "supports_streaming": True
-        },
-        "gpt-4-turbo": {
-            "provider": "openai",
-            "name": "GPT-4 Turbo",
-            "description": "High performance",
-            "max_tokens": 128000,
+            "name": "GPT-4.1 Nano",
+            "description": "Ultra-fast and efficient",
+            "max_tokens": 16385,
             "supports_streaming": True
         },
         # Google Gemini Models
-        "gemini-2.0-flash-exp": {
+        "gemini-2.5-flash-lite": {
             "provider": "google",
-            "name": "Gemini 2.0 Flash",
-            "description": "Latest Gemini model - Fast",
+            "name": "Gemini 2.5 Flash-Lite",
+            "description": "Ultra-fast Gemini model",
             "max_tokens": 8192,
             "supports_streaming": True
         },
-        "gemini-1.5-flash": {
+        "gemini-2.5-flash": {
             "provider": "google",
-            "name": "Gemini 1.5 Flash",
+            "name": "Gemini 2.5 Flash",
             "description": "Fast and efficient",
             "max_tokens": 8192,
             "supports_streaming": True
         },
-        "gemini-1.5-pro": {
+        "gemini-2.5-pro": {
             "provider": "google",
-            "name": "Gemini 1.5 Pro",
+            "name": "Gemini 2.5 Pro",
             "description": "Most capable Gemini",
             "max_tokens": 8192,
             "supports_streaming": True
@@ -115,7 +122,9 @@ class LLMService:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 streaming=streaming,
-                api_key=self.openai_api_key
+                api_key=self.openai_api_key,
+                timeout=30,  # Add timeout for faster failure
+                max_retries=1  # Reduce retries for faster response
             )
 
         elif provider == "google":
@@ -127,7 +136,9 @@ class LLMService:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 streaming=streaming,
-                google_api_key=self.google_api_key
+                google_api_key=self.google_api_key,
+                timeout=30,  # Add timeout for faster failure
+                max_retries=1  # Reduce retries for faster response
             )
 
         else:
@@ -151,7 +162,7 @@ class LLMService:
     def generate_response(
         self,
         message: str,
-        model: str = "gpt-4o-mini",
+        model: str = "gpt-5-mini",
         temperature: float = 0.7,
         max_tokens: int = 500,
         system_prompt: Optional[str] = None
@@ -191,7 +202,7 @@ class LLMService:
         self,
         message: str,
         context: str,
-        model: str = "gpt-4o-mini",
+        model: str = "gpt-5-mini",
         temperature: float = 0.7,
         max_tokens: int = 500,
         system_prompt_type: str = "support",
@@ -314,7 +325,7 @@ Be natural, friendly, and helpful:"""
         self,
         message: str,
         context: str,
-        model: str = "gpt-4o-mini",
+        model: str = "gpt-5-mini",
         temperature: float = 0.7,
         max_tokens: int = 500,
         system_prompt_type: str = "support",

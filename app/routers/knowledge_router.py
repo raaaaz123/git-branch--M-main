@@ -37,7 +37,8 @@ async def upload_document(
     metadata: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
     embedding_provider: Optional[str] = Form("voyage"),
-    embedding_model: Optional[str] = Form("voyage-3")
+    embedding_model: Optional[str] = Form("voyage-3"),
+    item_id: Optional[str] = Form(None)  # NEW: Accept Firestore document ID
 ):
     """Upload and process documents (text or PDF) to knowledge base"""
     try:
@@ -48,9 +49,13 @@ async def upload_document(
                 parsed_metadata = json.loads(metadata)
             except json.JSONDecodeError:
                 parsed_metadata = {"raw_metadata": metadata}
-        
-        # Generate unique ID
-        item_id = f"upload-{uuid.uuid4().hex[:8]}"
+
+        # Use provided item_id (Firestore doc ID) or generate unique ID
+        if item_id:
+            print(f"   Using provided item_id: {item_id}")
+        else:
+            item_id = f"upload-{uuid.uuid4().hex[:8]}"
+            print(f"   Generated new ID: {item_id}")
         
         # Process content based on document type
         final_content = content or ""

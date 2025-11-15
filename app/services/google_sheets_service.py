@@ -72,6 +72,60 @@ class GoogleSheetsService:
                 "error": f"Error during token exchange: {str(e)}"
             }
 
+    def refresh_access_token(
+        self,
+        refresh_token: str,
+        client_id: str,
+        client_secret: str
+    ) -> Dict[str, Any]:
+        """
+        Refresh an expired access token using refresh token
+
+        Returns:
+            {
+                "success": True/False,
+                "access_token": "...",
+                "expires_in": 3600,
+                "token_type": "Bearer",
+                "error": "..." (if failed)
+            }
+        """
+        try:
+            response = requests.post(
+                f"{self.oauth_base_url}/token",
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded"
+                },
+                data={
+                    "refresh_token": refresh_token,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "grant_type": "refresh_token"
+                }
+            )
+
+            if not response.ok:
+                error_data = response.json() if response.text else {}
+                return {
+                    "success": False,
+                    "error": error_data.get("error_description", "Failed to refresh token")
+                }
+
+            data = response.json()
+
+            return {
+                "success": True,
+                "access_token": data.get("access_token"),
+                "expires_in": data.get("expires_in"),
+                "token_type": data.get("token_type", "Bearer")
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Error refreshing token: {str(e)}"
+            }
+
     def list_spreadsheets(self, access_token: str, query: str = "") -> Dict[str, Any]:
         """
         List Google Sheets files from Google Drive
@@ -111,9 +165,13 @@ class GoogleSheetsService:
 
             if not response.ok:
                 error_data = response.json() if response.text else {}
+                error_message = error_data.get("error", {}).get("message", "Failed to list spreadsheets")
+
+                # Return the full error response for better debugging
                 return {
                     "success": False,
-                    "error": error_data.get("error", {}).get("message", "Failed to list spreadsheets")
+                    "error": error_message,
+                    "detail": error_data
                 }
 
             data = response.json()

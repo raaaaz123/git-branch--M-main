@@ -449,13 +449,20 @@ class FirestoreService:
             }
 
     async def get_document(self, doc_path: str) -> Optional[Dict[str, Any]]:
-        """Get a document from Firestore by path"""
+        """Get a document from Firestore by path (format: 'collection/document_id')"""
         try:
             if not self.db:
                 logger.error("Firestore not available")
                 return None
             
-            doc_ref = self.db.document(doc_path)
+            # Parse path: format is "collection/document_id"
+            parts = doc_path.split('/')
+            if len(parts) != 2:
+                logger.error(f"Invalid document path format: {doc_path}. Expected format: 'collection/document_id'")
+                return None
+            
+            collection_name, document_id = parts[0], parts[1]
+            doc_ref = self.db.collection(collection_name).document(document_id)
             doc = doc_ref.get()
             
             if doc.exists:
@@ -465,16 +472,24 @@ class FirestoreService:
                 
         except Exception as e:
             logger.error(f"❌ Error getting document from Firestore: {str(e)}")
+            logger.exception(e)
             return None
 
     async def set_document(self, doc_path: str, data: Dict[str, Any]) -> bool:
-        """Set a document in Firestore by path"""
+        """Set a document in Firestore by path (format: 'collection/document_id')"""
         try:
             if not self.db:
                 logger.error("Firestore not available")
                 return False
             
-            doc_ref = self.db.document(doc_path)
+            # Parse path: format is "collection/document_id"
+            parts = doc_path.split('/')
+            if len(parts) != 2:
+                logger.error(f"Invalid document path format: {doc_path}. Expected format: 'collection/document_id'")
+                return False
+            
+            collection_name, document_id = parts[0], parts[1]
+            doc_ref = self.db.collection(collection_name).document(document_id)
             doc_ref.set(data)
             
             logger.info(f"✅ Document set successfully: {doc_path}")

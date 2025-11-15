@@ -25,6 +25,10 @@ class GoogleSheetsListRequest(BaseModel):
     query: Optional[str] = ""
 
 
+class GoogleSheetsRefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
 class GoogleSheetsImportRequest(BaseModel):
     access_token: str
     spreadsheet_id: str
@@ -40,7 +44,8 @@ class GoogleSheetsImportRequest(BaseModel):
 @router.get("/oauth/authorize")
 async def initiate_oauth(
     workspace_id: str = Query(..., description="Workspace ID to associate the connection"),
-    agent_id: Optional[str] = Query(None, description="Optional agent ID")
+    agent_id: Optional[str] = Query(None, description="Optional agent ID"),
+    redirect_uri: Optional[str] = Query(None, description="Optional redirect URI after OAuth completes")
 ):
     """
     Initiate Google OAuth flow for Sheets access
@@ -50,8 +55,10 @@ async def initiate_oauth(
         if not GOOGLE_CLIENT_ID:
             raise HTTPException(status_code=500, detail="Google OAuth not configured. Missing GOOGLE_CLIENT_ID")
 
-        # Build state parameter with workspace and agent info
-        state = urllib.parse.quote(f"{workspace_id}:{agent_id or ''}")
+        # Build state parameter with workspace, agent, and redirect info
+        # Format: workspace_id:agent_id:redirect_uri (URL encoded)
+        state_parts = [workspace_id, agent_id or '', redirect_uri or '']
+        state = urllib.parse.quote(':'.join(state_parts))
 
         # Define OAuth scopes for Google Sheets
         scopes = [
@@ -107,13 +114,15 @@ async def handle_oauth_callback(request: GoogleSheetsOAuthCallbackRequest):
                 detail=token_result.get("error", "Failed to exchange code for token")
             )
 
-        # Parse state to get workspace and agent info
+        # Parse state to get workspace, agent, and redirect_uri info
         workspace_id = ""
         agent_id = ""
+        redirect_uri = ""
         if request.state:
             parts = request.state.split(":")
             workspace_id = parts[0] if len(parts) > 0 else ""
             agent_id = parts[1] if len(parts) > 1 else ""
+            redirect_uri = parts[2] if len(parts) > 2 else ""
 
         return {
             "success": True,
@@ -121,7 +130,8 @@ async def handle_oauth_callback(request: GoogleSheetsOAuthCallbackRequest):
             "refresh_token": token_result.get("refresh_token"),
             "expires_in": token_result.get("expires_in"),
             "workspace_id": workspace_id,
-            "agent_id": agent_id
+            "agent_id": agent_id,
+            "redirect_uri": redirect_uri
         }
 
     except HTTPException:
@@ -146,12 +156,44 @@ async def list_spreadsheets(request: GoogleSheetsListRequest):
                 "total": result["total"]
             }
         else:
-            raise HTTPException(status_code=400, detail=result["error"])
+            raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error listing spreadsheets: {str(e)}")
+
+
+@router.post("/refresh-token")
+async def refresh_token(request: GoogleSheetsRefreshTokenRequest):
+    """Refresh an expired Google OAuth access token"""
+    try:
+        if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+            raise HTTPException(
+                status_code=500,
+                detail="Google OAuth not configured. Missing credentials."
+            )
+
+        result = google_sheets_service.refresh_access_token(
+            refresh_token=request.refresh_token,
+            client_id=GOOGLE_CLIENT_ID,
+            client_secret=GOOGLE_CLIENT_SECRET
+        )
+
+        if result["success"]:
+            return {
+                "success": True,
+                "access_token": result["access_token"],
+                "expires_in": result.get("expires_in", 3600),
+                "token_type": result.get("token_type", "Bearer")
+            }
+        else:
+            raise HTTPException(status_code=400, detail=result.get("error", "Failed to refresh token"))
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error refreshing token: {str(e)}")
 
 
 @router.post("/import-sheet")

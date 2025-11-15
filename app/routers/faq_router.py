@@ -69,9 +69,14 @@ async def store_faq(request: FAQRequest):
             **request.metadata
         }
         
-        # Generate unique ID
-        base_owner = request.agent_id or request.widget_id or 'unknown'
-        faq_id = f"faq_{base_owner}_{uuid.uuid4().hex[:12]}_{int(time.time())}"
+        # Use provided item_id (Firestore doc ID) or generate unique ID
+        if hasattr(request, 'item_id') and request.item_id:
+            faq_id = request.item_id
+            logger.info(f"   Using provided item_id: {faq_id}")
+        else:
+            base_owner = request.agent_id or request.widget_id or 'unknown'
+            faq_id = f"faq_{base_owner}_{uuid.uuid4().hex[:12]}_{int(time.time())}"
+            logger.info(f"   Generated new ID: {faq_id}")
         
         logger.info(f"📝 Storing to Qdrant with embeddings: {request.embedding_provider}/{request.embedding_model}")
         logger.info(f"   FAQ ID: {faq_id}")

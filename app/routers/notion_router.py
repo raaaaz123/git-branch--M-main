@@ -54,7 +54,8 @@ class NotionOAuthCallbackRequest(BaseModel):
 @router.get("/oauth/authorize")
 async def initiate_oauth(
     workspace_id: str = Query(..., description="Workspace ID to associate the connection"),
-    agent_id: Optional[str] = Query(None, description="Optional agent ID")
+    agent_id: Optional[str] = Query(None, description="Optional agent ID"),
+    redirect_uri: Optional[str] = Query(None, description="Optional redirect URI after OAuth completes")
 ):
     """
     Initiate Notion OAuth flow
@@ -64,12 +65,10 @@ async def initiate_oauth(
         if not NOTION_CLIENT_ID:
             raise HTTPException(status_code=500, detail="Notion OAuth not configured. Missing NOTION_CLIENT_ID")
 
-        # Build state parameter with workspace and agent info
-        state_data = {
-            "workspace_id": workspace_id,
-            "agent_id": agent_id or ""
-        }
-        state = urllib.parse.quote(f"{workspace_id}:{agent_id or ''}")
+        # Build state parameter with workspace, agent, and redirect info
+        # Format: workspace_id:agent_id:redirect_uri (URL encoded)
+        state_parts = [workspace_id, agent_id or '', redirect_uri or '']
+        state = urllib.parse.quote(':'.join(state_parts))
 
         # Build authorization URL
         auth_url = (
@@ -116,19 +115,22 @@ async def handle_oauth_callback(request: NotionOAuthCallbackRequest):
                 detail=token_result.get("error", "Failed to exchange code for token")
             )
 
-        # Parse state to get workspace and agent info
+        # Parse state to get workspace, agent, and redirect_uri info
         workspace_id = ""
         agent_id = ""
+        redirect_uri = ""
         if request.state:
             parts = request.state.split(":")
             workspace_id = parts[0] if len(parts) > 0 else ""
             agent_id = parts[1] if len(parts) > 1 else ""
+            redirect_uri = parts[2] if len(parts) > 2 else ""
 
         return {
             "success": True,
             "access_token": token_result["access_token"],
             "workspace_id": workspace_id,
             "agent_id": agent_id,
+            "redirect_uri": redirect_uri,
             "notion_workspace_id": token_result.get("workspace_id"),
             "notion_workspace_name": token_result.get("workspace_name"),
             "notion_workspace_icon": token_result.get("workspace_icon"),

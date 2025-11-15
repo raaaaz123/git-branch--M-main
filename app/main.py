@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import ALLOWED_ORIGINS, API_HOST, API_PORT
-from app.routers import health_router, knowledge_router, ai_router, review_router, email_router, scraping_router, firestore_router, faq_router, notion_router, google_sheets_router, upload_router, calendly_router
+from app.routers import health_router, knowledge_router, ai_router, review_router, email_router, scraping_router, firestore_router, faq_router, notion_router, google_sheets_router, upload_router, calendly_router, zendesk_router, whatsapp_router
 from app.services.qdrant_service import qdrant_service
 
 # Create FastAPI app
@@ -37,6 +37,8 @@ app.include_router(notion_router.router)
 app.include_router(google_sheets_router.router)
 app.include_router(upload_router.router)
 app.include_router(calendly_router.router)
+app.include_router(zendesk_router.router)
+app.include_router(whatsapp_router.router)
 
 
 @app.on_event("startup")

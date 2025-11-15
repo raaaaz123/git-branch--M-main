@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """
-Simple HTTP server for email notifications
+DEPRECATED: This server is deprecated. Email notifications are now handled via Next.js API routes using SendPulse.
+See: app/api/emails/message-notification/route.ts
+
+This file is kept for reference only and should not be used.
 """
+# DEPRECATED - Email notifications are now handled via Next.js API routes using SendPulse
+# See: app/api/emails/message-notification/route.ts
+
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import urllib.parse
-from simple_email_service import email_service
+
+# Note: simple_email_service is deprecated - emails now use SendPulse via Next.js API routes
 
 class EmailHandler(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -46,16 +53,9 @@ class EmailHandler(BaseHTTPRequestHandler):
                 self.send_error(400, "Invalid sender type")
                 return
             
-            # Send email notification
-            result = email_service.send_notification_email(
-                to_email=recipient_email,
-                to_name=recipient_name,
-                subject=subject,
-                message_content=data['message'],
-                sender_type=data['senderType'],
-                customer_name=data['customerName'],
-                business_name=data['businessName']
-            )
+            # DEPRECATED: Email sending is now handled via Next.js API routes
+            # This endpoint should not be used - use app/api/emails/message-notification/route.ts instead
+            result = {"success": False, "error": "This endpoint is deprecated. Use Next.js API routes instead."}
             
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -72,15 +72,8 @@ class EmailHandler(BaseHTTPRequestHandler):
     
     def test_email(self):
         try:
-            result = email_service.send_notification_email(
-                to_email="support@rexahire.com",
-                to_name="Test User",
-                subject="Test Email from AI Native CRM",
-                message_content="This is a test email to verify the email service is working correctly.",
-                sender_type="customer",
-                customer_name="Test Customer",
-                business_name="Test Business"
-            )
+            # DEPRECATED: Email sending is now handled via Next.js API routes
+            result = {"success": False, "error": "This endpoint is deprecated. Use Next.js API routes instead."}
             
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -112,7 +105,7 @@ def run_server(port=8001):
     server_address = ('', port)
     httpd = HTTPServer(server_address, EmailHandler)
     print(f"🚀 Simple Email Server running on http://localhost:{port}")
-    print(f"📧 Email service ready for ZeptoMail integration")
+    print(f"⚠️  DEPRECATED: This server is deprecated. Use Next.js API routes with SendPulse instead.")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

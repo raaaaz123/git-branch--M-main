@@ -95,7 +95,15 @@ def setup_collection():
             field_schema=PayloadSchemaType.KEYWORD
         )
         print(f"   ✅ Created index for 'type'")
-        
+
+        # Index for itemId (required for deletion)
+        client.create_payload_index(
+            collection_name=QDRANT_COLLECTION_NAME,
+            field_name="itemId",
+            field_schema=PayloadSchemaType.KEYWORD
+        )
+        print(f"   ✅ Created index for 'itemId'")
+
         print(f"\n🎉 Setup complete!")
         print(f"✅ Collection '{QDRANT_COLLECTION_NAME}' is ready for use")
         print(f"✅ You can now add knowledge base items")

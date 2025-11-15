@@ -43,7 +43,7 @@ class AIService:
         
         return "medium"
 
-    def _should_skip_reranking(self, search_results: List[Dict], threshold: float = 0.8) -> bool:
+    def _should_skip_reranking(self, search_results: List[Dict], threshold: float = 0.7) -> bool:
         """Determine if reranking should be skipped based on top result confidence"""
         if not search_results:
             return True
@@ -51,9 +51,18 @@ class AIService:
         top_score = search_results[0].get("score", 0.0)
         print(f"🎯 Top result score: {top_score:.4f} (threshold: {threshold})")
         
+        # OPTIMIZED: Lower threshold from 0.8 to 0.7 to skip reranking more often
         if top_score >= threshold:
             print(f"✅ Skipping reranking - top result confidence is high ({top_score:.4f} >= {threshold})")
             return True
+        
+        # OPTIMIZED: Also skip if top 2 results have very similar scores (clear winner)
+        if len(search_results) >= 2:
+            second_score = search_results[1].get("score", 0.0)
+            score_diff = top_score - second_score
+            if score_diff >= 0.15:  # Top result is significantly better
+                print(f"✅ Skipping reranking - clear winner (diff: {score_diff:.4f})")
+                return True
         
         return False
 
@@ -100,10 +109,13 @@ class AIService:
             phase1_start = time.time()
             
             # Get more candidates for better reranking (but optimize based on complexity)
+            # OPTIMIZED: Reduce candidates to speed up retrieval
             if query_complexity == "simple":
-                initial_limit = max_docs * 2  # Less candidates for simple queries
+                initial_limit = max_docs  # Minimum candidates for simple queries (fast)
+            elif query_complexity == "medium":
+                initial_limit = max_docs * 2  # Medium candidates for medium queries
             else:
-                initial_limit = max_docs * 3  # More candidates for complex queries
+                initial_limit = max_docs * 2  # Still optimized for complex queries
             
             print(f"   📥 Hybrid search: retrieving {initial_limit} candidates...")
             
